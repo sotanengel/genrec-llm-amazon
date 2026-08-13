@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+
 from genrec_lite.report.build import aggregate_metrics_across_seeds
 
 

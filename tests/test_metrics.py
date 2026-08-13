@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from genrec_lite.eval.metrics import (
     aggregate_metrics,
     avg_popularity_at_k,

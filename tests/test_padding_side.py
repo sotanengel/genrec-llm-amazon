@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 import torch
+
 from genrec_lite.encode.prefill import PrefillEncoder
 
 

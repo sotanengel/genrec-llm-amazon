@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import polars as pl
+
 from genrec_lite.verbalize.base import Sample, TokenBudget
 from genrec_lite.verbalize.budget import count_tokens, get_tokenizer
 from genrec_lite.verbalize.compress import CompressConfig, compress_history_events

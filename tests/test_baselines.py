@@ -6,6 +6,7 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
+
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
 from genrec_lite.models.baselines.itemknn import ItemKNNRecommender

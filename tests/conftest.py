@@ -7,6 +7,7 @@ from pathlib import Path
 
 import polars as pl
 import pytest
+
 from genrec_lite.data.loaders.amazon import prepare_from_records
 from genrec_lite.data.schema import ParquetBundle, read_parquet_bundle
 from genrec_lite.data.split import apply_split

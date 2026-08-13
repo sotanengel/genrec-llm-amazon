@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import polars as pl
 import pytest
+
 from genrec_lite.data.split import SPLIT_TEST, SPLIT_TRAIN
 
 

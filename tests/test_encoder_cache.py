@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import torch
+
 from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
 
 

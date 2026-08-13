@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import polars as pl
+
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.eval.slices import all_slice_names, assign_slice, filter_slice
 

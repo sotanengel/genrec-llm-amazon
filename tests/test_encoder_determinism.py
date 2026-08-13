@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import torch
+
 from genrec_lite.encode.prefill import PrefillEncoder
 
 
