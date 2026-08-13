@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # This project is uv-managed (pyproject.toml + uv.lock, PEP 735
+  # dependency-groups); "uv" is GitHub's dedicated ecosystem for that,
+  # distinct from "pip" which does not understand uv.lock.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"

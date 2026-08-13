@@ -1,0 +1,35 @@
+name: Bug report
+description: Something is broken (a crash, wrong output, failing test, CI regression).
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you actually see?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Exact command(s) run, from a clean checkout if possible.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, `uv --version`, GPU/CUDA if relevant, commit SHA.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log / traceback output
+      render: shell
