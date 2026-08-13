@@ -100,26 +100,28 @@ VRAM ≈ Weights_4bit + LoRA_adapters + Optimizer_states(LoRA分) + Activations(
 Unsloth を使う場合、Mistral-7B QLoRA が **12.4GB → ~5-6GB** に落ちるという公表実測がある。
 これがそのまま 7-8B クラスへの窓口を開く。
 
-#### 2.3.3 実測前の見積り (M2 の最初に `scripts/bench_prefill.py` で実測して更新)
+#### 2.3.3 実測値 (WSL2 / RTX 3060 Ti 8GB, driver 610.47, 2026-08-13)
 
-**bf16 凍結推論 (seq 512, batch 適宜)**
+環境: Ubuntu 24.04 (WSL2), CUDA 12.x, `scripts/bench_prefill.py` + `scripts/wsl/doctor.sh` 12/12 PASS。
+GPU: NVIDIA GeForce RTX 3060 Ti (8192 MiB, compute capability 8.6), bf16 対応。
 
-| モデル | 想定VRAM | 想定スループット |
-|--------|---------|-----------------|
-| Qwen3-0.6B | ~1.4GB | ~8,000 tok/s |
-| Qwen3-1.7B | ~4GB | ~3,500 tok/s |
-| SmolLM3-3B | ~7GB | ~2,000 tok/s (bs4) |
+**bf16 凍結推論 (`padding=longest`, `scripts/bench_prefill.py`)**
+
+| モデル | seq | batch | peak VRAM | tok/s (real) | tok/s (padded) |
+|--------|-----|-------|-----------|--------------|----------------|
+| Qwen3-0.6B-Base | 128 | 2 | 1.12 GB | ~1,012 | ~7,620 |
+| Qwen3-1.7B-Base | 512 | 2 | 3.22 GB | ~3,346 | ~26,356 |
 
 **4bit (nf4) 凍結推論**
 
-| モデル | 重みVRAM | 総VRAM(seq512, bs4) | 想定スループット |
-|--------|---------|-------------------|-----------------|
-| Qwen3-4B | ~2.5GB | ~3.5GB | ~2,500 tok/s |
-| Qwen3-8B | ~4.5GB | ~5.5GB | ~1,500 tok/s |
-| Llama-3.1-8B | ~4.5GB | ~5.5GB | ~1,500 tok/s |
-| Qwen3-14B | ~7.7GB | **>8GB (実用不可)** | — |
+| モデル | seq | batch | peak VRAM | tok/s (real) | tok/s (padded) |
+|--------|-----|-------|-----------|--------------|----------------|
+| Qwen3-8B-Base (nf4) | 512 | 1 | 4.52 GB | ~658 | ~5,180 |
 
-**QLoRA + Unsloth (seq 512, bs 1〜2, grad-accum, grad-ckpt)**
+> 8B nf4 は seq512 bs1 で 8GB 内に収まる。bs2 以上は VRAM 余裕が少ないため `check_vram.py --find-max-batch` で都度確認すること。
+> 生 JSON: `reports/bench/prefill_qwen3-*.json`
+
+**QLoRA + Unsloth (seq 512, bs 1〜2, grad-accum, grad-ckpt)** — 未実測（M4 着手時に更新）
 
 | モデル | 想定VRAM | 30k サンプル / epoch |
 |--------|---------|---------------------|
@@ -129,8 +131,7 @@ Unsloth を使う場合、Mistral-7B QLoRA が **12.4GB → ~5-6GB** に落ち�
 | Qwen3-8B | ~6-7GB | 10〜15h |
 | Llama-3.1-8B | ~6-7GB | 10〜15h |
 
-> 上記の時間は「実効 prefill/backward 込みで 500〜1,500 tok/s」という粗い仮定。±2〜3倍のブレを見込む。
-> M2 の最初に必ず `scripts/bench_prefill.py` で自環境の実測値に更新すること。
+> 上記 QLoRA 時間は「実効 prefill/backward 込みで 500〜1,500 tok/s」という粗い仮定。±2〜3倍のブレを見込む。
 
 #### 2.3.4 8GB という制約が設計に与える帰結
 

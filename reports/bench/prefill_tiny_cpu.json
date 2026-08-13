@@ -1,0 +1,23 @@
+{
+  "model_id": "sshleifer/tiny-gpt2",
+  "revision": null,
+  "device": "cpu",
+  "batch_size": 4,
+  "seq_len": 128,
+  "padding": "longest",
+  "dtype": "float32",
+  "quantize": null,
+  "steps": 3,
+  "warmup": 1,
+  "tok_per_s_padded": 161408.10073534484,
+  "tok_per_s_real": 22698.01416590787,
+  "ms_per_batch_p50": 3.0855059999339574,
+  "ms_per_batch_p90": 3.4396439999682116,
+  "memory": {
+    "peak_allocated_gb": 0.0,
+    "peak_reserved_gb": 0.0,
+    "free_gb": 0.0,
+    "total_gb": 0.0
+  },
+  "timestamp": "2026-08-13T13:32:22.385355+00:00"
+}
