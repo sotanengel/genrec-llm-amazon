@@ -217,6 +217,29 @@ def _resolve_tokenizer_name(
     return "gpt2"
 
 
+def _resolve_tokenizer_revision(
+    verb_config: VerbalizerYamlConfig,
+    encoder_revision: str | None = None,
+) -> str | None:
+    """Resolve the revision to pin the budget tokenizer to, mirroring
+    `_resolve_tokenizer_name`'s null-means-encoder's-tokenizer semantics.
+
+    `tokenizer_name: null` means "use the encoder's own tokenizer", so it must
+    also be pinned to the *encoder's* revision (DESIGN.md §2.4.4) -- otherwise
+    a revision-pinned download (see `scripts/wsl/fetch_models.sh`) has no
+    `refs/main` in the HF cache and resolving the implicit `main` revision
+    fails under `HF_HUB_OFFLINE=1` even though the files are present.
+
+    An explicit literal `tokenizer_name` (e.g. "gpt2") has no corresponding
+    revision field in `VerbalizerYamlConfig`, so there is nothing to pin it
+    to; it resolves against whatever `main` means in the local environment,
+    same as before this fix.
+    """
+    if verb_config.tokenizer_name is not None:
+        return None
+    return encoder_revision
+
+
 def _build_encode_cache_meta(
     llm_config: LLMConfig, verbalizer: str, *, deterministic: bool
 ) -> dict[str, Any]:
@@ -279,12 +302,13 @@ def _resolve_verbalizer_and_budget(
     commands from drifting apart again.
     """
     tokenizer_name = _resolve_tokenizer_name(verb_config, llm_config.model_id)
+    revision = _resolve_tokenizer_revision(verb_config, llm_config.revision)
     try:
-        get_tokenizer(tokenizer_name)
+        get_tokenizer(tokenizer_name, revision)
     except OSError as exc:
         raise TokenizerResolutionError(
-            f"Could not load tokenizer '{tokenizer_name}' for verbalizer "
-            f"'{verb_config.name}' (resolved from tokenizer_name: "
+            f"Could not load tokenizer '{tokenizer_name}' (revision={revision!r}) for "
+            f"verbalizer '{verb_config.name}' (resolved from tokenizer_name: "
             f"{verb_config.tokenizer_name!r}, model: {llm_config.model_id!r}). "
             "This usually means either the tokenizer needs to be downloaded from "
             "the Hugging Face Hub but the environment is offline "
@@ -292,7 +316,9 @@ def _resolve_verbalizer_and_budget(
             "access), or the tokenizer id is wrong/gated without credentials."
         ) from exc
     renderer = build_verbalizer_from_config(verb_config)
-    budget = TokenBudget(max_tokens=verb_config.max_tokens, tokenizer_name=tokenizer_name)
+    budget = TokenBudget(
+        max_tokens=verb_config.max_tokens, tokenizer_name=tokenizer_name, revision=revision
+    )
     return renderer, budget
 
 

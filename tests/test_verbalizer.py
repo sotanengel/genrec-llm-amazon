@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
@@ -159,6 +160,100 @@ def test_resolve_tokenizer_name_falls_back_to_gpt2_without_encoder() -> None:
     assert _resolve_tokenizer_name(cfg) == "gpt2"
 
 
+def test_resolve_tokenizer_revision_uses_encoder_revision_when_null() -> None:
+    """`tokenizer_name: null` means "use the encoder's tokenizer", so the
+    budget tokenizer must also be pinned to the *encoder's* revision
+    (DESIGN.md §2.4.4) -- otherwise a revision-pinned download has no
+    `refs/main` in the HF cache and resolving the implicit `main` revision
+    fails under HF_HUB_OFFLINE=1."""
+    from genrec_lite.cli import _resolve_tokenizer_revision
+
+    cfg = VerbalizerYamlConfig(name="v1_full", tokenizer_name=None)
+    assert _resolve_tokenizer_revision(cfg, "ea980cb0a6c2ae4b936e82123acc929f1cec04c1") == (
+        "ea980cb0a6c2ae4b936e82123acc929f1cec04c1"
+    )
+
+
+def test_resolve_tokenizer_revision_is_none_for_explicit_literal() -> None:
+    """An explicit literal tokenizer_name (e.g. "gpt2") has no revision field in
+    VerbalizerYamlConfig to pin it to, so there is nothing to thread through --
+    it must resolve to None, not silently reuse the encoder's revision."""
+    from genrec_lite.cli import _resolve_tokenizer_revision
+
+    cfg = VerbalizerYamlConfig(name="v1_full", tokenizer_name="gpt2")
+    assert _resolve_tokenizer_revision(cfg, "ea980cb0a6c2ae4b936e82123acc929f1cec04c1") is None
+
+
+def test_get_tokenizer_passes_revision_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`get_tokenizer` must thread `revision` into `AutoTokenizer.from_pretrained`
+    -- a revision-pinned download (scripts/wsl/fetch_models.sh) never writes
+    `refs/main`, so omitting `revision=` fails offline even though the
+    tokenizer files are present under the pinned snapshot directory."""
+    get_tokenizer.cache_clear()
+    mock_tokenizer = MagicMock()
+    mock_tokenizer.pad_token = "<pad>"
+    calls: list[dict[str, object]] = []
+
+    def fake_from_pretrained(_model_id: str, **kwargs: object) -> MagicMock:
+        calls.append(dict(kwargs))
+        return mock_tokenizer
+
+    with patch("transformers.AutoTokenizer.from_pretrained", side_effect=fake_from_pretrained):
+        get_tokenizer("fake/pinned-model", "deadbeefcafe0123456789abcdef01234567890a")
+
+    assert calls == [{"revision": "deadbeefcafe0123456789abcdef01234567890a"}]
+    get_tokenizer.cache_clear()
+
+
+def test_get_tokenizer_omits_revision_kwarg_when_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No revision pinned -> no `revision=` kwarg at all (matches
+    `PrefillEncoder`'s `from_pretrained_common` pattern in
+    `genrec_lite.encode.prefill`), so behavior for unpinned callers is
+    unchanged from before this fix."""
+    get_tokenizer.cache_clear()
+    mock_tokenizer = MagicMock()
+    mock_tokenizer.pad_token = "<pad>"
+    calls: list[dict[str, object]] = []
+
+    def fake_from_pretrained(_model_id: str, **kwargs: object) -> MagicMock:
+        calls.append(dict(kwargs))
+        return mock_tokenizer
+
+    with patch("transformers.AutoTokenizer.from_pretrained", side_effect=fake_from_pretrained):
+        get_tokenizer("fake/unpinned-model")
+
+    assert calls == [{}]
+    get_tokenizer.cache_clear()
+
+
+def test_get_tokenizer_lru_cache_distinguishes_revisions(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two different revisions of the same tokenizer id must not collide in the
+    `@lru_cache` -- otherwise loading a second revision for an id already in
+    the cache would silently return the first revision's tokenizer."""
+    get_tokenizer.cache_clear()
+    load_count = 0
+
+    def fake_from_pretrained(_model_id: str, **kwargs: object) -> MagicMock:
+        nonlocal load_count
+        load_count += 1
+        tok = MagicMock()
+        tok.pad_token = "<pad>"
+        tok.revision = kwargs.get("revision")
+        return tok
+
+    with patch("transformers.AutoTokenizer.from_pretrained", side_effect=fake_from_pretrained):
+        tok_a = get_tokenizer("fake/shared-model-id", "revision-a")
+        tok_b = get_tokenizer("fake/shared-model-id", "revision-b")
+        tok_a_again = get_tokenizer("fake/shared-model-id", "revision-a")
+
+    assert load_count == 2, "expected exactly one load per distinct (name, revision) pair"
+    assert tok_a is not tok_b
+    assert tok_a is tok_a_again
+    assert tok_a.revision == "revision-a"
+    assert tok_b.revision == "revision-b"
+    get_tokenizer.cache_clear()
+
+
 @pytest.mark.parametrize("path", VERBALIZER_CONFIG_PATHS, ids=lambda p: p.name)
 def test_shipped_verbalizer_config_parses_and_is_null_tokenizer(path: Path) -> None:
     """Every shipped configs/verbalizer/*.yaml must parse, and (per the fix for
@@ -205,17 +300,23 @@ def test_verbalize_render_and_encode_run_produce_identical_prompt(
     import genrec_lite.verbalize.templates as templates_module
 
     resolved_names: list[str] = []
+    resolved_revisions: list[str | None] = []
 
-    def fake_count_tokens(text: str, tokenizer_name: str) -> int:
+    def fake_count_tokens(text: str, tokenizer_name: str, revision: str | None = None) -> int:
         return 0  # never exceed budget -> render() never takes the retry path
 
-    def fake_truncate_to_budget(text: str, max_tokens: int, tokenizer_name: str) -> str:
+    def fake_truncate_to_budget(
+        text: str, max_tokens: int, tokenizer_name: str, revision: str | None = None
+    ) -> str:
         resolved_names.append(tokenizer_name)
+        resolved_revisions.append(revision)
         return f"{text}\n<<resolved-tokenizer:{tokenizer_name}>>"
 
     monkeypatch.setattr(templates_module, "count_tokens", fake_count_tokens)
     monkeypatch.setattr(templates_module, "truncate_to_budget", fake_truncate_to_budget)
-    monkeypatch.setattr(cli_module, "get_tokenizer", lambda name: object(), raising=False)
+    monkeypatch.setattr(
+        cli_module, "get_tokenizer", lambda name, revision=None: object(), raising=False
+    )
 
     encoder_model_id = "fake/encoder-model-id"
     captured_texts: list[str] = []
@@ -285,5 +386,12 @@ def test_verbalize_render_and_encode_run_produce_identical_prompt(
     assert all(name == encoder_model_id for name in resolved_names), (
         "expected every resolved tokenizer to be the encoder's model id "
         f"({encoder_model_id!r}), got {sorted(set(resolved_names))!r}"
+    )
+    assert resolved_revisions, "truncate_to_budget was never called"
+    assert all(revision == "deadbeefcafe" for revision in resolved_revisions), (
+        "expected every resolved tokenizer revision to be the encoder's pinned "
+        f"revision ('deadbeefcafe'), got {sorted(set(resolved_revisions))!r} -- a "
+        "budget tokenizer resolving to an unpinned 'main' would defeat the "
+        "DESIGN.md §2.4.4 revision pin"
     )
     assert rendered_prompt == captured_texts[0]
