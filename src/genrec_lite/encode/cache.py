@@ -100,7 +100,7 @@ class HiddenStateCache:
                 f"got {tuple(hidden.shape)}"
             )
         memmap = self._open_memmap()
-        arr = hidden.detach().cpu().numpy().astype(np.float16)
+        arr = hidden.detach().cpu().to(torch.float16).numpy()
         for offset, row_idx in enumerate(row_indices):
             if row_idx < 0 or row_idx >= self.n_samples:
                 raise IndexError(f"row_idx {row_idx} out of range for n_samples={self.n_samples}")

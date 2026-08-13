@@ -56,7 +56,14 @@ if [ -d "${REPO_DIR}/.git" ]; then
 else
   log "cloning ${REPO_URL}"
   mkdir -p "$(dirname "${REPO_DIR}")"
-  git clone "${REPO_URL}" "${REPO_DIR}"
+  if ! git clone "${REPO_URL}" "${REPO_DIR}" 2>/dev/null; then
+    HTTPS_URL="${REPO_URL/git@github.com:/https://github.com/}"
+    if [ "${HTTPS_URL}" = "${REPO_URL}" ]; then
+      HTTPS_URL="https://github.com/sotanengel/genrec-llm-amazon.git"
+    fi
+    log "SSH clone failed; trying HTTPS ${HTTPS_URL}"
+    git clone "${HTTPS_URL}" "${REPO_DIR}"
+  fi
 fi
 
 # Optional secondary remote pointing at the Windows-side worktree, so unpushed

@@ -1,0 +1,23 @@
+{
+  "model_id": "Qwen/Qwen3-1.7B-Base",
+  "revision": "ea980cb0a6c2ae4b936e82123acc929f1cec04c1",
+  "device": "cuda",
+  "batch_size": 2,
+  "seq_len": 512,
+  "padding": "longest",
+  "dtype": "bfloat16",
+  "quantize": null,
+  "steps": 5,
+  "warmup": 2,
+  "tok_per_s_padded": 26355.807060434156,
+  "tok_per_s_real": 3345.95206821918,
+  "ms_per_batch_p50": 31.068274000062956,
+  "ms_per_batch_p90": 55.17910999992637,
+  "memory": {
+    "peak_allocated_gb": 3.219771385192871,
+    "peak_reserved_gb": 3.23828125,
+    "free_gb": 3.68359375,
+    "total_gb": 7.99951171875
+  },
+  "timestamp": "2026-08-13T13:35:23.848087+00:00"
+}

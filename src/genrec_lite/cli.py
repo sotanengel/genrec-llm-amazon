@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import random
 import subprocess
 from datetime import UTC, datetime
@@ -200,6 +201,10 @@ def report_build(
     console.print(f"[green]Report written:[/green] {output_path} (from {run_dir.name})")
 
 
+def _encode_deterministic(llm_config: LLMConfig) -> bool:
+    return llm_config.deterministic or os.environ.get("GENREC_DETERMINISTIC") == "1"
+
+
 def _resolve_tokenizer_name(
     verb_config: VerbalizerYamlConfig,
     encoder_model_id: str | None = None,
@@ -211,7 +216,9 @@ def _resolve_tokenizer_name(
     return "gpt2"
 
 
-def _build_encode_cache_meta(llm_config: LLMConfig, verbalizer: str) -> dict[str, Any]:
+def _build_encode_cache_meta(
+    llm_config: LLMConfig, verbalizer: str, *, deterministic: bool
+) -> dict[str, Any]:
     import transformers
 
     meta: dict[str, Any] = {
@@ -225,7 +232,7 @@ def _build_encode_cache_meta(llm_config: LLMConfig, verbalizer: str) -> dict[str
         "quantize": llm_config.quantize,
         "pooling": llm_config.pooling,
         "attn_implementation": llm_config.attn_implementation,
-        "deterministic": llm_config.deterministic,
+        "deterministic": deterministic,
         "encoder_version": ENCODER_VERSION,
         "batch_size": llm_config.batch_size,
         "max_batch_tokens": llm_config.max_batch_tokens,
@@ -326,6 +333,7 @@ def encode_run(
 
     encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])
+    deterministic = _encode_deterministic(llm_config)
     cache_key = compute_cache_key(
         CacheKeyConfig(
             model_id=llm_config.model_id,
@@ -337,7 +345,7 @@ def encode_run(
             quantize=llm_config.quantize,
             pooling=llm_config.pooling,
             attn_implementation=llm_config.attn_implementation,
-            deterministic=llm_config.deterministic,
+            deterministic=deterministic,
             encoder_version=ENCODER_VERSION,
         )
     )
@@ -353,7 +361,7 @@ def encode_run(
         )
 
     lengths = encoder.token_lengths(texts)
-    if llm_config.deterministic:
+    if deterministic:
         batch_size = llm_config.batch_size or 8
         batch_groups = [
             list(range(start, min(start + batch_size, len(texts))))
@@ -374,7 +382,10 @@ def encode_run(
         batch_hidden = encoder.encode_batch(batch_texts)
         cache.write_rows(pending, batch_hidden)
 
-    cache.finalize(sample_ids, _build_encode_cache_meta(llm_config, verbalizer))
+    cache.finalize(
+        sample_ids,
+        _build_encode_cache_meta(llm_config, verbalizer, deterministic=deterministic),
+    )
     msg = (
         f"[green]Cached[/green] {len(texts)} vectors "
         f"({cache.expected_bytes} bytes) -> {cache.memmap_path}"

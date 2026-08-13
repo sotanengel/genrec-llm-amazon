@@ -71,6 +71,16 @@ def test_cache_hit_returns_bit_identical(tmp_path: Path) -> None:
     assert torch.equal(loaded.to(torch.float32), hidden)
 
 
+def test_write_rows_accepts_bfloat16(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "bf16", n_samples=1, hidden_dim=2)
+    hidden = torch.tensor([[1.5, 2.5]], dtype=torch.bfloat16)
+    cache.write_rows([0], hidden)
+    cache.finalize([1])
+    loaded = cache.load()
+    assert loaded.shape == (1, 2)
+    assert torch.allclose(loaded.to(torch.float32), hidden.to(torch.float32), atol=1e-3)
+
+
 def test_write_rows_and_finalize_roundtrip(tmp_path: Path) -> None:
     cache = HiddenStateCache(tmp_path, "stream", n_samples=3, hidden_dim=2)
     cache.write_rows([2], torch.tensor([[1.0, 2.0]]))
