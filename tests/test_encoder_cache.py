@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import torch
@@ -63,6 +64,20 @@ def test_key_stable_across_process() -> None:
     assert compute_cache_key(cfg) == compute_cache_key(cfg)
 
 
+def test_encoder_version_does_not_silently_default_to_stale_value() -> None:
+    """A caller that forgets to pass encoder_version must not silently get a
+    key for a different encoder generation. The default must track the real
+    ENCODER_VERSION, not a hardcoded historical value."""
+    cfg = CacheKeyConfig(
+        model_id="m",
+        revision="abc123",
+        verbalizer_name="v1_full",
+        verbalizer_config={"max_history": 20},
+        max_len=512,
+    )
+    assert cfg.encoder_version == ENCODER_VERSION
+
+
 def test_cache_hit_returns_bit_identical(tmp_path: Path) -> None:
     cache = HiddenStateCache(tmp_path, "abc", n_samples=2, hidden_dim=4)
     hidden = torch.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]], dtype=torch.float32)
@@ -109,3 +124,93 @@ def test_cache_miss_recomputes(tmp_path: Path) -> None:
     cache.save([42], hidden)
     other = HiddenStateCache(tmp_path, "key2", n_samples=1, hidden_dim=2)
     assert not other.exists()
+
+
+def test_write_rows_appends_progress_without_rewriting_full_history(tmp_path: Path) -> None:
+    """write_rows must be O(1) amortized per batch: each call appends one
+    record instead of reading + re-serializing the whole completed-rows set.
+    A single JSON-object-per-file format (the old design) collapses to one
+    line no matter how many calls are made; an append-only log grows one
+    line per call."""
+    cache = HiddenStateCache(tmp_path, "append", n_samples=4, hidden_dim=1)
+    cache.write_rows([0], torch.tensor([[1.0]]))
+    cache.write_rows([1], torch.tensor([[2.0]]))
+    cache.write_rows([2], torch.tensor([[3.0]]))
+
+    lines = [line for line in cache.progress_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(lines) == 3, (
+        "progress file should gain one appended record per write_rows call, "
+        f"got {len(lines)} lines: {lines!r}"
+    )
+    assert cache.rows_written() == 3
+    assert cache.completed_rows() == {0, 1, 2}
+
+
+def test_resume_after_crash_produces_byte_identical_memmap(tmp_path: Path) -> None:
+    """An interrupted-then-resumed run (object dropped mid-way, reopened, and
+    finished) must produce a byte-identical memmap to an uninterrupted run,
+    and the file must be exactly n_samples * hidden_dim * 2 bytes."""
+    n_samples, hidden_dim = 6, 3
+    hidden_full = torch.arange(n_samples * hidden_dim, dtype=torch.float32).reshape(
+        n_samples, hidden_dim
+    )
+    sample_ids = list(range(100, 100 + n_samples))
+
+    uninterrupted_dir = tmp_path / "uninterrupted"
+    cache_a = HiddenStateCache(uninterrupted_dir, "k", n_samples=n_samples, hidden_dim=hidden_dim)
+    cache_a.write_rows(list(range(n_samples)), hidden_full)
+    cache_a.finalize(sample_ids)
+
+    resumed_dir = tmp_path / "resumed"
+    half = n_samples // 2
+    cache_b1 = HiddenStateCache(resumed_dir, "k", n_samples=n_samples, hidden_dim=hidden_dim)
+    cache_b1.write_rows(list(range(0, half)), hidden_full[:half])
+    del cache_b1  # simulate a crash: no finalize, no clean shutdown
+
+    cache_b2 = HiddenStateCache(resumed_dir, "k", n_samples=n_samples, hidden_dim=hidden_dim)
+    assert cache_b2.rows_written() == half
+    cache_b2.write_rows(list(range(half, n_samples)), hidden_full[half:])
+    cache_b2.finalize(sample_ids)
+
+    bytes_a = (uninterrupted_dir / "k.f16.memmap").read_bytes()
+    bytes_b = (resumed_dir / "k.f16.memmap").read_bytes()
+    expected_size = n_samples * hidden_dim * 2
+    assert len(bytes_a) == expected_size
+    assert len(bytes_b) == expected_size
+    assert bytes_a == bytes_b
+
+
+def test_legacy_progress_json_is_honoured_on_resume(tmp_path: Path) -> None:
+    """A pre-upgrade `*.progress.json` (single JSON object, {"completed_rows":
+    [...]}) must still be read on resume rather than silently restarting a
+    partially finished multi-hour job."""
+    cache = HiddenStateCache(tmp_path, "legacy", n_samples=2, hidden_dim=2)
+    legacy_path = tmp_path / "legacy.progress.json"
+    legacy_path.write_text(json.dumps({"completed_rows": [0]}), encoding="utf-8")
+
+    assert cache.completed_rows() == {0}
+    assert cache.rows_written() == 1
+
+    # Resume: only the remaining row needs to be written.
+    cache.write_rows([1], torch.tensor([[3.0, 4.0]]))
+    assert cache.rows_written() == 2
+    cache.finalize([10, 11])
+    assert cache.exists()
+
+
+def test_legacy_and_new_progress_formats_are_merged(tmp_path: Path) -> None:
+    """If both an old-format file and new-format appends exist (e.g. a run
+    upgraded mid-flight), completed rows from both must be honoured."""
+    cache = HiddenStateCache(tmp_path, "mixed", n_samples=3, hidden_dim=1)
+    legacy_path = tmp_path / "mixed.progress.json"
+    legacy_path.write_text(json.dumps({"completed_rows": [0]}), encoding="utf-8")
+
+    cache.write_rows([1], torch.tensor([[2.0]]))
+    assert cache.completed_rows() == {0, 1}
+
+    cache.write_rows([2], torch.tensor([[3.0]]))
+    cache.finalize([10, 11, 12])
+    assert cache.exists()
+    # finalize() should clean up both progress files.
+    assert not legacy_path.exists()
+    assert not cache.progress_path.exists()

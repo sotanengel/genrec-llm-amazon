@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,13 @@ import numpy as np
 import polars as pl
 import torch
 from torch import Tensor
+
+from genrec_lite.encode.prefill import ENCODER_VERSION
+
+# There is no import cycle here: prefill.py imports from genrec_lite.config
+# and genrec_lite.encode.backend only, neither of which import this module.
+# If prefill.py ever grows a dependency on cache.py, ENCODER_VERSION must be
+# relocated to a neutral module rather than papering over the cycle (D3).
 
 
 @dataclass(frozen=True)
@@ -26,7 +34,11 @@ class CacheKeyConfig:
     pooling: str = "last"
     attn_implementation: str = "auto"
     deterministic: bool = False
-    encoder_version: int = 1
+    # Defaults to the *current* encoder generation so a caller that forgets
+    # to pass this explicitly cannot silently compute a cache key for a
+    # stale/different encoder (D3). Callers that care about a specific
+    # historical generation must still pass it explicitly.
+    encoder_version: int = ENCODER_VERSION
 
 
 def compute_cache_key(config: CacheKeyConfig) -> str:
@@ -50,7 +62,35 @@ def compute_cache_key(config: CacheKeyConfig) -> str:
 
 
 class HiddenStateCache:
-    """float16 memmap cache for hidden states with resumable row writes."""
+    """float16 memmap cache for hidden states with resumable row writes.
+
+    Progress tracking (DESIGN.md §9 M2, issue audit D1):
+
+    The naive approach — re-reading and re-serializing the full
+    completed-rows set after every batch — is O(N) per batch, i.e. O(N^2/B)
+    over a run, which becomes multi-gigabyte redundant I/O and quadratic CPU
+    on a 100k-row run with small batches (especially over a 9p-mounted
+    Windows filesystem).
+
+    Instead, `write_rows` appends a single JSON line (the row indices just
+    written) to an append-only log (`*.progress.jsonl`), flushed and fsynced
+    so a killed process does not lose acknowledged rows. This makes
+    `write_rows` O(batch_size) amortized instead of O(N). Reading the full
+    completed-rows set (`completed_rows()` / `rows_written()`) is still
+    O(rows-written-so-far), but that only happens once per resume/finalize,
+    not once per batch.
+
+    A fixed-size bitmap file (mmap'd, one byte per row) would also satisfy
+    the O(1)-per-row requirement and would make `completed_rows()` O(1) too;
+    an append-only log was chosen instead because it needs no pre-sizing,
+    is trivially human-inspectable, and its crash-safety story (append +
+    flush + fsync) is simpler to reason about than partial bitmap writes.
+
+    Backward compatibility: a pre-upgrade `*.progress.json` (single JSON
+    object `{"completed_rows": [...]}`) is still read on resume rather than
+    silently restarting a partially finished multi-hour job. Both formats
+    are merged if both happen to be present (e.g. a run upgraded mid-flight).
+    """
 
     def __init__(self, cache_dir: Path, key: str, n_samples: int, hidden_dim: int) -> None:
         self.cache_dir = cache_dir
@@ -61,7 +101,12 @@ class HiddenStateCache:
         self.memmap_path = self.cache_dir / f"{key}.f16.memmap"
         self.index_path = self.cache_dir / f"{key}.index.parquet"
         self.meta_path = self.cache_dir / f"{key}.meta.json"
-        self.progress_path = self.cache_dir / f"{key}.progress.json"
+        # New append-only progress log (D1). One JSON array of row indices
+        # per line, appended (never rewritten) by write_rows.
+        self.progress_path = self.cache_dir / f"{key}.progress.jsonl"
+        # Old whole-file progress format, kept only for backward-compatible
+        # reads on resume (D1).
+        self._legacy_progress_path = self.cache_dir / f"{key}.progress.json"
         self._memmap: np.memmap | None = None
 
     @property
@@ -72,13 +117,33 @@ class HiddenStateCache:
         return self._load_completed_rows()
 
     def _load_completed_rows(self) -> set[int]:
-        if not self.progress_path.exists():
-            return set()
-        data = json.loads(self.progress_path.read_text(encoding="utf-8"))
-        rows = data.get("completed_rows", [])
-        if not isinstance(rows, list):
-            raise ValueError(f"Invalid progress file: {self.progress_path}")
-        return {int(r) for r in rows}
+        completed: set[int] = set()
+        if self._legacy_progress_path.exists():
+            data = json.loads(self._legacy_progress_path.read_text(encoding="utf-8"))
+            rows = data.get("completed_rows", [])
+            if not isinstance(rows, list):
+                raise ValueError(f"Invalid progress file: {self._legacy_progress_path}")
+            completed.update(int(r) for r in rows)
+        if self.progress_path.exists():
+            text = self.progress_path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                row_ids = json.loads(line)
+                if not isinstance(row_ids, list):
+                    raise ValueError(f"Invalid progress log line in {self.progress_path}: {line!r}")
+                completed.update(int(r) for r in row_ids)
+        return completed
+
+    def _append_progress(self, row_indices: list[int]) -> None:
+        if not row_indices:
+            return
+        line = json.dumps(row_indices) + "\n"
+        with self.progress_path.open("a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
 
     def rows_written(self) -> int:
         return len(self._load_completed_rows())
@@ -106,12 +171,11 @@ class HiddenStateCache:
                 raise IndexError(f"row_idx {row_idx} out of range for n_samples={self.n_samples}")
             memmap[row_idx] = arr[offset]
         memmap.flush()
-        completed = self._load_completed_rows()
-        completed.update(row_indices)
-        self.progress_path.write_text(
-            json.dumps({"completed_rows": sorted(completed)}),
-            encoding="utf-8",
-        )
+        # Append-only (D1): O(batch_size) amortized, not O(N). The memmap is
+        # flushed to disk above *before* we acknowledge these rows here, so a
+        # kill -9 immediately after this line still leaves the data durable
+        # for every row this progress record claims as complete.
+        self._append_progress(row_indices)
 
     def finalize(self, sample_ids: list[int], meta: dict[str, Any] | None = None) -> None:
         if len(sample_ids) != self.n_samples:
@@ -127,6 +191,8 @@ class HiddenStateCache:
         self.meta_path.write_text(json.dumps(sidecar, indent=2, sort_keys=True), encoding="utf-8")
         if self.progress_path.exists():
             self.progress_path.unlink()
+        if self._legacy_progress_path.exists():
+            self._legacy_progress_path.unlink()
 
     def save(
         self, sample_ids: list[int], hidden: Tensor, meta: dict[str, Any] | None = None
