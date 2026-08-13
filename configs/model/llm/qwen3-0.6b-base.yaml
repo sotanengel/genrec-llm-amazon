@@ -1,5 +1,5 @@
-model_id: Qwen/Qwen3-1.7B-Base
-revision: ea980cb0a6c2ae4b936e82123acc929f1cec04c1
+model_id: Qwen/Qwen3-0.6B-Base
+revision: da87bfb608c14b7cf20ba1ce41287e8de496c0cd
 license: Apache-2.0
 commercial_use_ok: true
 dtype: bfloat16

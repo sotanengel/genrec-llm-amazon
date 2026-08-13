@@ -23,10 +23,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import yaml
+from genrec_lite.config import validate_llm_config_file
 
 DEFAULT_CONFIG_DIR = Path("configs/model/llm")
-_DISALLOWED_REVISIONS = {"main", "master"}
 
 
 class ConfigContractError(ValueError):
@@ -38,45 +37,13 @@ def check_model_config(path: Path) -> list[str]:
 
     An empty list means the file is compliant.
     """
-    errors: list[str] = []
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as exc:
-        return [f"{path}: could not parse YAML: {exc}"]
-
-    if not isinstance(data, dict):
-        return [f"{path}: expected a YAML mapping at the top level"]
-
-    model_id = data.get("model_id")
-    if not isinstance(model_id, str) or not model_id.strip():
-        errors.append(f"{path}: `model_id` is missing or empty")
-
-    revision = data.get("revision")
-    if not isinstance(revision, str) or not revision.strip():
-        errors.append(f"{path}: `revision` is missing or empty")
-    elif revision.strip().lower() in _DISALLOWED_REVISIONS:
-        errors.append(
-            f"{path}: `revision: {revision}` is a moving branch alias, not a "
-            "pinned commit/tag. Pin a concrete revision so run metadata stays "
-            "reproducible even if the model is later replaced upstream "
-            "(DESIGN.md §2.4.4)."
-        )
-
-    license_ = data.get("license")
-    if not isinstance(license_, str) or not license_.strip():
-        errors.append(
-            f"{path}: `license` is missing or empty (DESIGN.md §2.4.4 requires "
-            "every model config to declare its license explicitly)."
-        )
-
-    if "commercial_use_ok" not in data:
-        errors.append(
-            f"{path}: `commercial_use_ok` is missing (DESIGN.md §2.4.4 requires "
-            "every model config to declare commercial-usability explicitly)."
-        )
-
-    return errors
+        validate_llm_config_file(path)
+        return []
+    except (ValueError, FileNotFoundError) as exc:
+        return [f"{path}: {exc}"]
+    except OSError as exc:
+        return [f"{path}: could not read file: {exc}"]
 
 
 def check_directory(config_dir: Path) -> dict[Path, list[str]]:
