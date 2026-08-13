@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from genrec_lite.config import (
+    VerbalizerYamlConfig,
     find_project_root,
     load_data_config,
     load_exp_config,
@@ -36,7 +37,7 @@ from genrec_lite.report.build import (
     save_run_metadata,
 )
 from genrec_lite.verbalize.base import Sample, TokenBudget
-from genrec_lite.verbalize.templates import build_verbalizer
+from genrec_lite.verbalize.templates import build_verbalizer_from_config
 
 app = typer.Typer(help="GenRec-lite: minimal GenRec reproduction CLI")
 data_app = typer.Typer(help="Data preparation and statistics")
@@ -195,6 +196,17 @@ def report_build(
     console.print(f"[green]Report written:[/green] {output_path} (from {run_dir.name})")
 
 
+def _resolve_tokenizer_name(
+    verb_config: VerbalizerYamlConfig,
+    encoder_model_id: str | None = None,
+) -> str:
+    if verb_config.tokenizer_name is not None:
+        return verb_config.tokenizer_name
+    if encoder_model_id is not None:
+        return encoder_model_id
+    return "gpt2"
+
+
 def _sample_from_row(row: dict[str, Any]) -> Sample:
     return Sample(
         user_id=int(row["user_id"]),
@@ -225,9 +237,10 @@ def verbalize_render(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer(verbalizer)
+    renderer = build_verbalizer_from_config(verb_config)
     budget = TokenBudget(
-        max_tokens=verb_config.max_tokens, tokenizer_name=verb_config.tokenizer_name
+        max_tokens=verb_config.max_tokens,
+        tokenizer_name=_resolve_tokenizer_name(verb_config),
     )
     subset = samples.head(n)
 
@@ -263,9 +276,10 @@ def encode_run(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer(verbalizer)
+    renderer = build_verbalizer_from_config(verb_config)
     budget = TokenBudget(
-        max_tokens=verb_config.max_tokens, tokenizer_name=verb_config.tokenizer_name
+        max_tokens=verb_config.max_tokens,
+        tokenizer_name=_resolve_tokenizer_name(verb_config, llm_config.model_id),
     )
     texts: list[str] = []
     sample_ids: list[int] = []

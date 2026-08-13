@@ -89,7 +89,7 @@ class VerbalizerYamlConfig(BaseModel):
     desc_top_k: int = 3
     title_max_chars: int = 60
     max_tokens: int = 512
-    tokenizer_name: str = "gpt2"
+    tokenizer_name: str | None = None
 
 
 def _load_yaml(path: Path) -> dict[str, object]:
