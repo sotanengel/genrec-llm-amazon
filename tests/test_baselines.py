@@ -6,7 +6,6 @@ import numpy as np
 import polars as pl
 import pytest
 import torch
-
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
 from genrec_lite.models.baselines.itemknn import ItemKNNRecommender
@@ -19,9 +18,7 @@ def test_pop_recommends_most_frequent(mini_bundle: tuple) -> None:
     model = build_baseline("pop")
     model.fit(interactions, items)
     train = interactions.filter(pl.col("split") == 0)
-    top_item = (
-        train.group_by("item_id").len().sort("len", descending=True)["item_id"][0]
-    )
+    top_item = train.group_by("item_id").len().sort("len", descending=True)["item_id"][0]
     test_samples = samples.filter(pl.col("split") == 2).head(1)
     scores = model.score_batch(test_samples)
     assert int(np.argmax(scores[0])) == int(top_item)
@@ -36,9 +33,7 @@ def test_p_topfreq_prefers_user_history(mini_bundle: tuple) -> None:
     user_id = int(test_samples["user_id"][0])
     train = interactions.filter((pl.col("split") == 0) & (pl.col("user_id") == user_id))
     if train.height > 0:
-        top_user_item = (
-            train.group_by("item_id").len().sort("len", descending=True)["item_id"][0]
-        )
+        top_user_item = train.group_by("item_id").len().sort("len", descending=True)["item_id"][0]
         assert scores[0, int(top_user_item)] >= scores[0].max() - 1e-6
 
 

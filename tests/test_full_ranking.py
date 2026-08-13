@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import polars as pl
 import pytest
-
 from genrec_lite.eval.runner import evaluate
 
 
@@ -36,9 +35,7 @@ def test_evaluator_does_not_hide_train_items(mini_bundle: tuple) -> None:
     interactions, items, users, samples = mini_bundle
     test_samples = samples.filter(pl.col("split") == 2)
     n_items = items.height
-    train_items = set(
-        interactions.filter(pl.col("split") == 0)["item_id"].unique().to_list()
-    )
+    train_items = set(interactions.filter(pl.col("split") == 0)["item_id"].unique().to_list())
 
     captured_shapes: list[int] = []
 

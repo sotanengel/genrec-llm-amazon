@@ -1,0 +1,9 @@
+name: v0_ids_only
+variant: v0_ids_only
+include_context: true
+include_descriptions: false
+max_history: 20
+desc_top_k: 0
+title_max_chars: 60
+max_tokens: 512
+tokenizer_name: gpt2

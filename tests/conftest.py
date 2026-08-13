@@ -7,10 +7,11 @@ from pathlib import Path
 
 import polars as pl
 import pytest
-
 from genrec_lite.data.loaders.amazon import prepare_from_records
 from genrec_lite.data.schema import ParquetBundle, read_parquet_bundle
 from genrec_lite.data.split import apply_split
+
+TINY_MODEL_ID = "sshleifer/tiny-gpt2"
 
 
 def _make_review_records(n_users: int = 10, n_items: int = 20, n_inter: int = 80) -> list[dict]:
@@ -53,6 +54,11 @@ def _make_meta_records(n_items: int = 20) -> list[dict]:
 @pytest.fixture
 def deterministic_seeds() -> None:
     random.seed(42)
+
+
+@pytest.fixture
+def tiny_model_id() -> str:
+    return TINY_MODEL_ID
 
 
 @pytest.fixture

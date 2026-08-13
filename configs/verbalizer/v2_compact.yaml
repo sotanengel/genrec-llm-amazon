@@ -1,0 +1,9 @@
+name: v2_compact
+variant: v2_compact
+include_context: true
+include_descriptions: false
+max_history: 20
+desc_top_k: 0
+title_max_chars: 60
+max_tokens: 512
+tokenizer_name: gpt2

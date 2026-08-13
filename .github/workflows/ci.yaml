@@ -33,10 +33,32 @@ jobs:
         run: ruff check src tests
 
       - name: Mypy
-        run: mypy --strict src
+        run: mypy --strict --explicit-package-bases src
 
       - name: Pytest
         run: pytest -x -n auto --timeout=10 tests/ -m "not slow"
+
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" pre-commit uv
+
+      - name: Pre-commit
+        run: pre-commit run --all-files
 
   zizmor:
     runs-on: ubuntu-latest

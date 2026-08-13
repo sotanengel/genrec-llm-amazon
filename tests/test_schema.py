@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import polars as pl
-
 from genrec_lite.data.schema import (
     INTERACTIONS_SCHEMA,
     ITEMS_SCHEMA,

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import polars as pl
-
 from genrec_lite.eval.runner import evaluate
-from genrec_lite.eval.slices import assign_slice, filter_slice
+from genrec_lite.eval.slices import all_slice_names, assign_slice, filter_slice
 
 
 def test_repeat_flag_correctness(mini_bundle: tuple) -> None:
@@ -57,3 +56,18 @@ def test_slice_metrics_never_nan_when_nonempty(mini_bundle: tuple) -> None:
         values = result[col].dropna().tolist()
         if values:
             assert all(not (isinstance(v, float) and v != v) for v in values)
+
+
+def test_pop_decile_slices_filter(mini_bundle: tuple) -> None:
+    interactions, items, users, samples = mini_bundle
+    test_samples = samples.filter(pl.col("split") == 2)
+    enriched = assign_slice(test_samples, items, interactions)
+    decile_names = [s for s in all_slice_names() if s.startswith("pop_decile_")]
+    assert len(decile_names) == 10
+    total = 0
+    for name in decile_names:
+        subset = filter_slice(enriched, name)
+        total += subset.height
+        for row in subset.iter_rows(named=True):
+            assert row["pop_decile"] == name
+    assert total == enriched.height

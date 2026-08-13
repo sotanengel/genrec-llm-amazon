@@ -212,9 +212,7 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
             streaming=True,
         )
     except Exception as exc:
-        raise RuntimeError(
-            f"Failed to load Amazon Reviews 2023 from HuggingFace: {exc}"
-        ) from exc
+        raise RuntimeError(f"Failed to load Amazon Reviews 2023 from HuggingFace: {exc}") from exc
 
     review_records: list[dict[str, Any]] = []
     meta_records: list[dict[str, Any]] = []
