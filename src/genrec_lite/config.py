@@ -26,6 +26,26 @@ class BaseConfig(BaseModel):
     split_strategy: SplitStrategy = "global_temporal"
 
 
+class SasrecConfig(BaseModel):
+    hidden_dim: int = 32
+    num_layers: int = 1
+    num_heads: int = 2
+    max_seq_len: int = 50
+    epochs: int = 3
+    lr: float = 0.001
+    batch_size: int = 64
+
+
+class ExpConfig(BaseModel):
+    dataset: str
+    baselines: list[str] = Field(default_factory=lambda: ["pop"])
+    ks: list[int] = Field(default_factory=lambda: [10, 20])
+    seeds: list[int] = Field(default_factory=lambda: [0])
+    eval_split: int = Field(default=2, ge=0, le=2)
+    cold_threshold: int = Field(default=5, ge=1)
+    sasrec: SasrecConfig = Field(default_factory=SasrecConfig)
+
+
 def _load_yaml(path: Path) -> dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -57,6 +77,18 @@ def load_data_config(
     if "output_dir" in merged:
         merged["output_dir"] = Path(str(merged["output_dir"]))
     return DataConfig.model_validate(merged)
+
+
+def load_exp_config(
+    exp: str,
+    config_dir: Path | None = None,
+) -> ExpConfig:
+    root = config_dir or Path("configs")
+    exp_path = root / "exp" / f"{exp}.yaml"
+    if not exp_path.exists():
+        raise FileNotFoundError(f"Experiment config not found: {exp_path}")
+    data = _load_yaml(exp_path)
+    return ExpConfig.model_validate(data)
 
 
 def find_project_root(start: Path | None = None) -> Path:

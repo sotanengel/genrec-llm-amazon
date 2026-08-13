@@ -1,4 +1,4 @@
-.PHONY: install lint test-fast test-slow data-prepare data-stats
+.PHONY: install lint test-fast test-slow data-prepare data-stats eval-baselines report
 
 install:
 	pip install -e ".[dev]"
@@ -21,3 +21,9 @@ data-prepare:
 
 data-stats:
 	python -m genrec_lite data stats --dataset amazon_video_games
+
+eval-baselines:
+	python -m genrec_lite eval run --exp m1_baselines
+
+report:
+	python -m genrec_lite report build --exp m1_baselines
