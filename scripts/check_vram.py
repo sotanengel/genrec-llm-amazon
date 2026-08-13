@@ -7,6 +7,7 @@ import argparse
 import logging
 
 import torch
+
 from genrec_lite.encode.prefill import PrefillEncoder
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

@@ -8,6 +8,7 @@ import logging
 import sys
 
 import polars as pl
+
 from genrec_lite.config import find_project_root, load_data_config, load_exp_config
 from genrec_lite.data.schema import read_parquet_bundle
 from genrec_lite.eval.runner import evaluate
