@@ -1,0 +1,20 @@
+dataset: amazon_video_games
+baselines:
+  - pop
+  - p_topfreq
+  - gp_topfreq
+  - itemknn
+  - sasrec
+  - textknn
+ks: [10, 20]
+seeds: [0, 1, 2]
+eval_split: 2
+cold_threshold: 5
+sasrec:
+  hidden_dim: 32
+  num_layers: 1
+  num_heads: 2
+  max_seq_len: 50
+  epochs: 3
+  lr: 0.001
+  batch_size: 64

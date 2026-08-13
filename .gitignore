@@ -30,5 +30,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Models (downloaded locally)
-models/
+# Models (downloaded locally, project root only)
+/models/
