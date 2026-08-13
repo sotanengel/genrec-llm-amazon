@@ -22,6 +22,10 @@ class Sample:
 class TokenBudget:
     max_tokens: int
     tokenizer_name: str
+    # Pinned revision for `tokenizer_name` (DESIGN.md §2.4.4). `None` when the
+    # tokenizer isn't pinned to a specific revision -- see
+    # `genrec_lite.cli._resolve_tokenizer_revision` for how this is derived.
+    revision: str | None = None
 
 
 class Verbalizer(Protocol):

@@ -100,26 +100,50 @@ VRAM ≈ Weights_4bit + LoRA_adapters + Optimizer_states(LoRA分) + Activations(
 Unsloth を使う場合、Mistral-7B QLoRA が **12.4GB → ~5-6GB** に落ちるという公表実測がある。
 これがそのまま 7-8B クラスへの窓口を開く。
 
-#### 2.3.3 実測値 (WSL2 / RTX 3060 Ti 8GB, driver 610.47, 2026-08-13)
+#### 2.3.3 実測値 (WSL2 / RTX 3060 Ti 8GB, driver 610.47, 2026-08-14 再測定)
 
-環境: Ubuntu 24.04 (WSL2), CUDA 12.x, `scripts/bench_prefill.py` + `scripts/wsl/doctor.sh` 12/12 PASS。
+環境: Ubuntu 24.04 (WSL2), torch 2.13.0+cu130 / transformers 4.57.6, attn=sdpa,
+`HF_HUB_OFFLINE=1`、`scripts/wsl/doctor.sh` 12/12 PASS。
 GPU: NVIDIA GeForce RTX 3060 Ti (8192 MiB, compute capability 8.6), bf16 対応。
+
+> **⚠️ 2026-08-13 版の数値は誤りだったので破棄した。**
+> 当時の `bench_prefill.py` は (1) フィラー文字列が `max_len // 8` 回の繰り返しで
+> 実際には約 52〜64 トークンしか生成しておらず、`seq 512` と記録しつつ seq≈52 を測っていた。
+> (2) `padded_tokens` を実テンソル幅ではなく公称 `max_len` から計算していたため
+> `tok/s (padded)` が約 8 倍に膨らんでいた。両方を修正して再測定した値が下表。
+> 同一文字列を `padding=longest` で流すのでパディングは発生せず、
+> **real と padded が一致するのが正しい**（一致しない場合は計測がおかしい）。
 
 **bf16 凍結推論 (`padding=longest`, `scripts/bench_prefill.py`)**
 
-| モデル | seq | batch | peak VRAM | tok/s (real) | tok/s (padded) |
-|--------|-----|-------|-----------|--------------|----------------|
-| Qwen3-0.6B-Base | 128 | 2 | 1.12 GB | ~1,012 | ~7,620 |
-| Qwen3-1.7B-Base | 512 | 2 | 3.22 GB | ~3,346 | ~26,356 |
+| モデル | seq | batch | peak VRAM (alloc/reserved) | tok/s | ms/batch p50 |
+|--------|-----|-------|---------------------------|-------|--------------|
+| Qwen3-0.6B-Base | 128 | 2 | 1.13 / 1.14 GB | ~7,608 | 31.1 |
+| Qwen3-1.7B-Base | 512 | 2 | 3.26 / 3.29 GB | ~7,571 | 134.9 |
 
 **4bit (nf4) 凍結推論**
 
-| モデル | seq | batch | peak VRAM | tok/s (real) | tok/s (padded) |
-|--------|-----|-------|-----------|--------------|----------------|
-| Qwen3-8B-Base (nf4) | 512 | 1 | 4.52 GB | ~658 | ~5,180 |
+| モデル | seq | batch | peak VRAM (alloc/reserved) | tok/s | ms/batch p50 |
+|--------|-----|-------|---------------------------|-------|--------------|
+| Qwen3-8B-Base (nf4) | 512 | 1 | 4.65 / 4.70 GB | ~1,515 | 337.5 |
 
-> 8B nf4 は seq512 bs1 で 8GB 内に収まる。bs2 以上は VRAM 余裕が少ないため `check_vram.py --find-max-batch` で都度確認すること。
-> 生 JSON: `reports/bench/prefill_qwen3-*.json`
+**§2.3.3 旧推定値との対比**
+
+| モデル | 推定 VRAM | 実測 VRAM | 推定 tok/s | 実測 tok/s |
+|--------|----------|----------|-----------|-----------|
+| Qwen3-1.7B (bf16) | ~4GB | **3.26GB** | ~3,500 | **~7,571** |
+| Qwen3-8B (nf4) | ~5.5GB | **4.65GB** | ~1,500 | **~1,515** |
+
+推定はいずれも保守側に外れており、8B nf4 のスループット推定 (~1,500) はほぼ的中していた。
+
+> **seq を 52→512 に是正しても VRAM はほとんど増えなかった** (1.7B: 3.22→3.26GB、8B: 4.52→4.65GB)。
+> sdpa が flash カーネルにディスパッチするため attention のメモリが O(seq²) ではなく O(seq) で、
+> 重みが支配的なため。**「8GB に収まる」という結論は再測定後も維持される。**
+> 一方スループットは大きく変わった: 短い系列ではカーネル起動のオーバーヘッドが支配的で
+> レイテンシ律速だったため、真の 512 トークンでは実効 tok/s がむしろ上がっている。
+>
+> bs2 以上は VRAM 余裕が少ないため `check_vram.py --find-max-batch` で都度確認すること。
+> 生 JSON: `reports/bench/prefill_qwen3-*.json` (`seq_len_actual` / `padded_width` で実測長を検証できる)
 
 **QLoRA + Unsloth (seq 512, bs 1〜2, grad-accum, grad-ckpt)** — 未実測（M4 着手時に更新）
 
@@ -825,6 +849,21 @@ SASRec を Amazon の公式 `5core/last_out` 分割 + full ranking で回し、
 
 11. **`description` の長さ。** Amazon の description は数千文字あることがある。
     parquet 化の時点で truncate しておかないとメモリを食い潰す。
+
+12. **中断した encode を fast モードで再開すると、無中断の実行とビット一致しない。** (2026-08-14 実測)
+    既定 (非 deterministic) の `encode run` はトークン予算でバッチを組むため、
+    再開時には「未処理の行だけ」で再バケッティングされる。元の実行で
+    `{3, 9, 12}` が同じバッチだった行が、再開時には `{9, 12}` だけのバッチになり、
+    パディング幅もリダクション順序も変わる。bf16 では **最大 1.2% 程度ずれる**
+    (Qwen3-8B nf4, 値域 ~165 に対し max_abs_diff 2.0 を実測)。
+    - `GENREC_DETERMINISTIC=1` なら固定サイズの逐次バッチになるので、
+      再開しても **sha256 まで一致する**ことを実測で確認済み。
+    - 実務上の意味: クラッシュした長時間ランを fast モードで再開したキャッシュは、
+      2 種類のバッチ構成が混ざった状態になる。**M5 のアブレーションのように
+      run 間で hidden state を比較する用途では `GENREC_DETERMINISTIC=1` で回すこと。**
+      スループット目的の通常ランでは fast モードで問題ない。
+    - 検証方法: `scripts/wsl/m2_ac_check.sh` は deterministic モードで
+      2 回エンコードして sha256 一致を確認している (M2 AC(c))。
 
 ---
 

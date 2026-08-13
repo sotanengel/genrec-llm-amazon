@@ -6,4 +6,7 @@ max_history: 20
 desc_top_k: 0
 title_max_chars: 60
 max_tokens: 512
-tokenizer_name: gpt2
+# null means "use the encoder's tokenizer" (DESIGN.md §5.2): the prompt token
+# budget must be counted with the same tokenizer that actually encodes it, or
+# `encode run` silently truncates prompts that §5.2 already decided to keep.
+tokenizer_name: null

@@ -42,7 +42,8 @@ from genrec_lite.report.build import (
     save_run_metadata,
 )
 from genrec_lite.verbalize.base import Sample, TokenBudget
-from genrec_lite.verbalize.templates import build_verbalizer_from_config
+from genrec_lite.verbalize.budget import get_tokenizer
+from genrec_lite.verbalize.templates import TemplateVerbalizer, build_verbalizer_from_config
 
 app = typer.Typer(help="GenRec-lite: minimal GenRec reproduction CLI")
 data_app = typer.Typer(help="Data preparation and statistics")
@@ -216,6 +217,29 @@ def _resolve_tokenizer_name(
     return "gpt2"
 
 
+def _resolve_tokenizer_revision(
+    verb_config: VerbalizerYamlConfig,
+    encoder_revision: str | None = None,
+) -> str | None:
+    """Resolve the revision to pin the budget tokenizer to, mirroring
+    `_resolve_tokenizer_name`'s null-means-encoder's-tokenizer semantics.
+
+    `tokenizer_name: null` means "use the encoder's own tokenizer", so it must
+    also be pinned to the *encoder's* revision (DESIGN.md §2.4.4) -- otherwise
+    a revision-pinned download (see `scripts/wsl/fetch_models.sh`) has no
+    `refs/main` in the HF cache and resolving the implicit `main` revision
+    fails under `HF_HUB_OFFLINE=1` even though the files are present.
+
+    An explicit literal `tokenizer_name` (e.g. "gpt2") has no corresponding
+    revision field in `VerbalizerYamlConfig`, so there is nothing to pin it
+    to; it resolves against whatever `main` means in the local environment,
+    same as before this fix.
+    """
+    if verb_config.tokenizer_name is not None:
+        return None
+    return encoder_revision
+
+
 def _build_encode_cache_meta(
     llm_config: LLMConfig, verbalizer: str, *, deterministic: bool
 ) -> dict[str, Any]:
@@ -261,9 +285,71 @@ def _sample_from_row(row: dict[str, Any]) -> Sample:
     )
 
 
+class TokenizerResolutionError(RuntimeError):
+    """Raised when the tokenizer named by a verbalizer/model config can't be loaded."""
+
+
+def _resolve_verbalizer_and_budget(
+    verb_config: VerbalizerYamlConfig,
+    llm_config: LLMConfig,
+) -> tuple[TemplateVerbalizer, TokenBudget]:
+    """Build the renderer + token budget shared by `verbalize render` and `encode run`.
+
+    Both commands MUST resolve the tokenizer identically, or a human reviewing
+    `verbalize render --n 20` output (DESIGN.md §9 M2's explicit acceptance step)
+    would be looking at prompts different from what `encode run` actually feeds
+    to the model. Keeping this logic in one place is what prevents the two
+    commands from drifting apart again.
+    """
+    tokenizer_name = _resolve_tokenizer_name(verb_config, llm_config.model_id)
+    revision = _resolve_tokenizer_revision(verb_config, llm_config.revision)
+    try:
+        get_tokenizer(tokenizer_name, revision)
+    except OSError as exc:
+        raise TokenizerResolutionError(
+            f"Could not load tokenizer '{tokenizer_name}' (revision={revision!r}) for "
+            f"verbalizer '{verb_config.name}' (resolved from tokenizer_name: "
+            f"{verb_config.tokenizer_name!r}, model: {llm_config.model_id!r}). "
+            "This usually means either the tokenizer needs to be downloaded from "
+            "the Hugging Face Hub but the environment is offline "
+            "(HF_HUB_OFFLINE=1 / GENREC_NO_NETWORK=1 is set, or there is no network "
+            "access), or the tokenizer id is wrong/gated without credentials."
+        ) from exc
+    renderer = build_verbalizer_from_config(verb_config)
+    budget = TokenBudget(
+        max_tokens=verb_config.max_tokens, tokenizer_name=tokenizer_name, revision=revision
+    )
+    return renderer, budget
+
+
+def _render_texts(
+    samples: pl.DataFrame,
+    items: pl.DataFrame,
+    users: pl.DataFrame,
+    interactions: pl.DataFrame,
+    renderer: TemplateVerbalizer,
+    budget: TokenBudget,
+) -> list[str]:
+    """Render one prompt per sample row, in row order."""
+    return [
+        renderer.render(_sample_from_row(row), items, users, interactions, budget)
+        for row in samples.iter_rows(named=True)
+    ]
+
+
 @verbalize_app.command("render")
 def verbalize_render(
     dataset: str = typer.Option(..., "--dataset", help="Dataset config name"),
+    model: str = typer.Option(
+        "qwen3-1.7b-base",
+        "--model",
+        help=(
+            "LLM config name. Determines the tokenizer used to budget/truncate "
+            "prompts when the verbalizer's tokenizer_name is null, exactly as "
+            "`encode run` does, so the two commands never emit different prompts "
+            "for the same sample."
+        ),
+    ),
     verbalizer: str = typer.Option("v1_full", "--verbalizer", help="Verbalizer config name"),
     n: int = typer.Option(20, "--n", help="Number of samples to dump"),
     output: str = typer.Option("reports/verbalizer_samples.md", "--output"),
@@ -273,6 +359,7 @@ def verbalize_render(
     _setup_logging(verbose)
     root = find_project_root()
     data_config = load_data_config(dataset, config_dir=root / "configs")
+    llm_config = load_llm_config(model, config_dir=root / "configs")
     verb_config = load_verbalizer_config(verbalizer, config_dir=root / "configs")
     data_dir = root / data_config.output_dir
     if not data_dir.exists():
@@ -280,17 +367,16 @@ def verbalize_render(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer_from_config(verb_config)
-    budget = TokenBudget(
-        max_tokens=verb_config.max_tokens,
-        tokenizer_name=_resolve_tokenizer_name(verb_config),
-    )
+    try:
+        renderer, budget = _resolve_verbalizer_and_budget(verb_config, llm_config)
+    except TokenizerResolutionError as exc:
+        console.print(f"[red]Tokenizer resolution failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
     subset = samples.head(n)
+    texts = _render_texts(subset, items, users, interactions, renderer, budget)
 
     lines = [f"# Verbalizer samples ({verbalizer})", ""]
-    for i, row in enumerate(subset.iter_rows(named=True), start=1):
-        sample = _sample_from_row(row)
-        prompt = renderer.render(sample, items, users, interactions, budget)
+    for i, prompt in enumerate(texts, start=1):
         lines.extend([f"## Sample {i}", "", "```", prompt, "```", ""])
 
     output_path = root / output
@@ -319,17 +405,13 @@ def encode_run(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer_from_config(verb_config)
-    budget = TokenBudget(
-        max_tokens=verb_config.max_tokens,
-        tokenizer_name=_resolve_tokenizer_name(verb_config, llm_config.model_id),
-    )
-    texts: list[str] = []
-    sample_ids: list[int] = []
-    for row in samples.iter_rows(named=True):
-        sample = _sample_from_row(row)
-        texts.append(renderer.render(sample, items, users, interactions, budget))
-        sample_ids.append(int(row["sample_id"]))
+    try:
+        renderer, budget = _resolve_verbalizer_and_budget(verb_config, llm_config)
+    except TokenizerResolutionError as exc:
+        console.print(f"[red]Tokenizer resolution failed:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    texts = _render_texts(samples, items, users, interactions, renderer, budget)
+    sample_ids = [int(x) for x in samples["sample_id"].to_list()]
 
     encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])

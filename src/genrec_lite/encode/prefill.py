@@ -93,8 +93,36 @@ class PrefillEncoder:
         if not uses_quant:
             self.model.to(self.device)
 
+        # NOTE (D4): torch.use_deterministic_algorithms is a *process-global*
+        # flag, not scoped to this instance or even to this model. If we flip
+        # it on here and never flip it back, any other PrefillEncoder (or any
+        # other torch code at all) constructed later in the same process
+        # silently inherits determinism mode too -- paying its cost, or
+        # crashing outright on an op with no deterministic kernel. We record
+        # the flag's prior value and restore it in close() / on context-
+        # manager exit. This does not change what the deterministic path
+        # computes (GENREC_DETERMINISTIC=1 still produces bit-identical
+        # output while this encoder is open) -- it only makes the *scope* of
+        # the global flag explicit and undoable.
+        self._prev_deterministic_algorithms: bool | None = None
         if self.deterministic and self.device != "cpu":
+            self._prev_deterministic_algorithms = torch.are_deterministic_algorithms_enabled()
             torch.use_deterministic_algorithms(True)
+
+    def close(self) -> None:
+        """Restore the process-global deterministic-algorithms flag to what
+        it was before this encoder changed it (D4). Safe to call multiple
+        times, and a no-op if this encoder never touched the flag (e.g.
+        `deterministic=False`, or `device="cpu"`)."""
+        if self._prev_deterministic_algorithms is not None:
+            torch.use_deterministic_algorithms(self._prev_deterministic_algorithms)
+            self._prev_deterministic_algorithms = None
+
+    def __enter__(self) -> PrefillEncoder:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     @classmethod
     def from_config(cls, cfg: LLMConfig, device: str | None = None) -> PrefillEncoder:
@@ -131,7 +159,16 @@ class PrefillEncoder:
             return hidden[batch_idx, last_indices]
         return hidden[batch_idx, last_indices]
 
-    @torch.no_grad()
+    # D5: inference_mode is strictly cheaper than no_grad for pure inference
+    # (skips version-counter bookkeeping no_grad still pays for). Verified
+    # safe for this codebase's only downstream consumer of encode_batch's
+    # output: HiddenStateCache.write_rows does
+    # `hidden.detach().cpu().to(torch.float16).numpy()`, and inference
+    # tensors support detach/cpu/to/numpy without error -- the only real
+    # restriction is that an inference tensor cannot later have
+    # requires_grad_(True) set or be used in autograd outside inference mode,
+    # which nothing in this repo does with encode_batch's return value.
+    @torch.inference_mode()
     def encode_batch(self, texts: list[str], *, padding: PaddingMode | None = None) -> Tensor:
         pad_mode: PaddingMode = padding or self._padding_mode()
         encoded = self.tokenizer(

@@ -189,7 +189,7 @@ class TemplateVerbalizer:
             footer = NO_CONTEXT_FOOTER.render()
 
         prompt = prefix + "\n".join(history_lines) + footer
-        if count_tokens(prompt, budget.tokenizer_name) > budget.max_tokens:
+        if count_tokens(prompt, budget.tokenizer_name, budget.revision) > budget.max_tokens:
             tighter = VerbalizerConfig(
                 name=self._config.name,
                 variant=self._config.variant,
@@ -209,7 +209,7 @@ class TemplateVerbalizer:
             tighter_verbalizer._item_lookup = self._item_lookup
             tighter_verbalizer._user_lookup = self._user_lookup
             return tighter_verbalizer.render(sample, items, users, interactions, budget)
-        return truncate_to_budget(prompt, budget.max_tokens, budget.tokenizer_name)
+        return truncate_to_budget(prompt, budget.max_tokens, budget.tokenizer_name, budget.revision)
 
 
 def build_verbalizer_from_config(cfg: VerbalizerYamlConfig) -> TemplateVerbalizer:
