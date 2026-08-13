@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import random
 from pathlib import Path
 
@@ -139,3 +140,55 @@ def mini_interactions_loo(mini_interactions: pl.DataFrame) -> pl.DataFrame:
 @pytest.fixture
 def mini_bundle(mini_dataset: Path) -> ParquetBundle:
     return read_parquet_bundle(mini_dataset)
+
+
+def _is_offline() -> bool:
+    """True when the environment explicitly opted out of network access.
+
+    Two independent env vars are honored: HF_HUB_OFFLINE (the HuggingFace
+    Hub convention, so setting it once also makes `transformers`/`datasets`
+    themselves refuse to hit the network) and GENREC_NO_NETWORK (a
+    project-specific escape hatch that doesn't require knowing the HF Hub
+    variable name).
+    """
+    return os.environ.get("HF_HUB_OFFLINE") == "1" or os.environ.get("GENREC_NO_NETWORK") == "1"
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Auto-mark and auto-skip tests (issue #13, P4).
+
+    - Any test that depends (directly or via a fixture chain) on the
+      `tiny_model_id` fixture is auto-marked `network`, since that fixture
+      backs HuggingFace Hub downloads (AutoTokenizer/AutoModel.from_pretrained).
+      This beats hand-marking: a new test using the fixture can't forget the
+      marker because it never has to add it.
+    - `network`-marked tests are then auto-skipped when the environment
+      declares itself offline (see `_is_offline`), so `pytest` can be run
+      (and commits made) without a network connection.
+    - `gpu`-marked tests are auto-skipped unless a CUDA device is actually
+      available; GitHub-hosted CI runners never have one, so these only run
+      locally (e.g. via `make test-gpu` in WSL).
+    """
+    offline = _is_offline()
+    skip_network = pytest.mark.skip(
+        reason="offline: HF_HUB_OFFLINE=1 or GENREC_NO_NETWORK=1 is set"
+    )
+
+    try:
+        import torch
+
+        has_cuda = torch.cuda.is_available()
+    except ImportError:  # pragma: no cover - torch is a hard dependency
+        has_cuda = False
+    skip_gpu = pytest.mark.skip(reason="no CUDA device available")
+
+    for item in items:
+        fixture_names = getattr(item, "fixturenames", ())
+        if "tiny_model_id" in fixture_names and "network" not in item.keywords:
+            item.add_marker(pytest.mark.network)
+
+        if "network" in item.keywords and offline:
+            item.add_marker(skip_network)
+
+        if "gpu" in item.keywords and not has_cuda:
+            item.add_marker(skip_gpu)
