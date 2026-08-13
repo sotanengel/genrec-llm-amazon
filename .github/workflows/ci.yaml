@@ -2,66 +2,114 @@ name: CI
 
 on:
   push:
-    branches: [main, "feature/**"]
+    branches: [main, "feature/**", "claude/**", "fix/**"]
   pull_request:
     branches: [main]
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
+env:
+  # Never pull the ~2.3GB CUDA torch wheel on CPU-only runners (issue #13, P5).
+  UV_TORCH_BACKEND: cpu
+
 jobs:
-  lint-and-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Ruff
-        run: ruff check src tests
-
-      - name: Mypy
-        run: mypy --strict --explicit-package-bases src
-
-      - name: Pytest
-        run: pytest -x -n auto --timeout=10 tests/ -m "not slow"
-
   pre-commit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
-      - name: Set up Python
-        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          python-version: "3.11"
-          cache: pip
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]" pre-commit uv
+      - name: Sync dependencies
+        run: uv sync --frozen
 
-      - name: Pre-commit
-        run: pre-commit run --all-files
+      - name: Cache pre-commit environments
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+
+      # Only the ruff + ruff-format + baseline file hooks: mypy and
+      # pytest-fast run for real in the dedicated typecheck/test jobs below
+      # (with a python matrix for the latter), so running them again here
+      # would just duplicate work. check-model-configs only fires when a
+      # configs/model/llm/*.yaml is part of the diff, same as locally.
+      - name: Pre-commit (file-level hooks)
+        run: SKIP=mypy,pytest-fast uv run --frozen pre-commit run --all-files --show-diff-on-failure
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Mypy
+        run: uv run --frozen mypy --config-file=pyproject.toml --strict --explicit-package-bases src scripts
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    env:
+      TOKENIZERS_PARALLELISM: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          python-version: ${{ matrix.python-version }}
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Cache HuggingFace Hub downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/huggingface
+          key: hf-cache-${{ matrix.python-version }}-${{ hashFiles('tests/conftest.py') }}
+          restore-keys: |
+            hf-cache-${{ matrix.python-version }}-
+
+      - name: Pytest
+        run: uv run --frozen pytest -n auto --timeout=60 tests/ -m "not slow"
 
   zizmor:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -77,6 +125,7 @@ jobs:
 
   pinact:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

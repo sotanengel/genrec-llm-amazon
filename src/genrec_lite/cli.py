@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import random
+import subprocess
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -14,6 +16,8 @@ import typer
 from rich.console import Console
 
 from genrec_lite.config import (
+    LLMConfig,
+    VerbalizerYamlConfig,
     find_project_root,
     load_data_config,
     load_exp_config,
@@ -23,8 +27,9 @@ from genrec_lite.config import (
 from genrec_lite.data.loaders.amazon import prepare_amazon_dataset
 from genrec_lite.data.schema import read_parquet_bundle
 from genrec_lite.data.stats import print_stats
+from genrec_lite.encode.batching import batch_indices_by_token_budget
 from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
-from genrec_lite.encode.prefill import PrefillEncoder
+from genrec_lite.encode.prefill import ENCODER_VERSION, PrefillEncoder
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
 from genrec_lite.report.build import (
@@ -36,7 +41,7 @@ from genrec_lite.report.build import (
     save_run_metadata,
 )
 from genrec_lite.verbalize.base import Sample, TokenBudget
-from genrec_lite.verbalize.templates import build_verbalizer
+from genrec_lite.verbalize.templates import build_verbalizer_from_config
 
 app = typer.Typer(help="GenRec-lite: minimal GenRec reproduction CLI")
 data_app = typer.Typer(help="Data preparation and statistics")
@@ -195,6 +200,49 @@ def report_build(
     console.print(f"[green]Report written:[/green] {output_path} (from {run_dir.name})")
 
 
+def _resolve_tokenizer_name(
+    verb_config: VerbalizerYamlConfig,
+    encoder_model_id: str | None = None,
+) -> str:
+    if verb_config.tokenizer_name is not None:
+        return verb_config.tokenizer_name
+    if encoder_model_id is not None:
+        return encoder_model_id
+    return "gpt2"
+
+
+def _build_encode_cache_meta(llm_config: LLMConfig, verbalizer: str) -> dict[str, Any]:
+    import transformers
+
+    meta: dict[str, Any] = {
+        "verbalizer": verbalizer,
+        "transformers_version": transformers.__version__,
+        "torch_version": torch.__version__,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "model_id": llm_config.model_id,
+        "revision": llm_config.revision,
+        "dtype": llm_config.dtype,
+        "quantize": llm_config.quantize,
+        "pooling": llm_config.pooling,
+        "attn_implementation": llm_config.attn_implementation,
+        "deterministic": llm_config.deterministic,
+        "encoder_version": ENCODER_VERSION,
+        "batch_size": llm_config.batch_size,
+        "max_batch_tokens": llm_config.max_batch_tokens,
+    }
+    try:
+        meta["git_sha"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        meta["git_sha"] = "unknown"
+    if torch.cuda.is_available():
+        meta["gpu_name"] = torch.cuda.get_device_name(0)
+    return meta
+
+
 def _sample_from_row(row: dict[str, Any]) -> Sample:
     return Sample(
         user_id=int(row["user_id"]),
@@ -225,9 +273,10 @@ def verbalize_render(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer(verbalizer)
+    renderer = build_verbalizer_from_config(verb_config)
     budget = TokenBudget(
-        max_tokens=verb_config.max_tokens, tokenizer_name=verb_config.tokenizer_name
+        max_tokens=verb_config.max_tokens,
+        tokenizer_name=_resolve_tokenizer_name(verb_config),
     )
     subset = samples.head(n)
 
@@ -263,9 +312,10 @@ def encode_run(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
-    renderer = build_verbalizer(verbalizer)
+    renderer = build_verbalizer_from_config(verb_config)
     budget = TokenBudget(
-        max_tokens=verb_config.max_tokens, tokenizer_name=verb_config.tokenizer_name
+        max_tokens=verb_config.max_tokens,
+        tokenizer_name=_resolve_tokenizer_name(verb_config, llm_config.model_id),
     )
     texts: list[str] = []
     sample_ids: list[int] = []
@@ -274,20 +324,21 @@ def encode_run(
         texts.append(renderer.render(sample, items, users, interactions, budget))
         sample_ids.append(int(row["sample_id"]))
 
-    encoder = PrefillEncoder(
-        model_id=llm_config.model_id,
-        dtype=llm_config.dtype,
-        pooling=llm_config.pooling,
-        max_len=llm_config.max_len,
-        quantize=llm_config.quantize,
-    )
+    encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])
     cache_key = compute_cache_key(
         CacheKeyConfig(
             model_id=llm_config.model_id,
+            revision=llm_config.revision,
             verbalizer_name=verbalizer,
             verbalizer_config=verb_config.model_dump(),
             max_len=llm_config.max_len,
+            dtype=llm_config.dtype,
+            quantize=llm_config.quantize,
+            pooling=llm_config.pooling,
+            attn_implementation=llm_config.attn_implementation,
+            deterministic=llm_config.deterministic,
+            encoder_version=ENCODER_VERSION,
         )
     )
     cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim)
@@ -295,14 +346,35 @@ def encode_run(
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
         raise typer.Exit(code=0)
 
-    batch_size = 8
-    chunks: list[Any] = []
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start : start + batch_size]
-        chunks.append(encoder.encode_batch(batch))
+    completed = cache.completed_rows()
+    if completed:
+        console.print(
+            f"[yellow]Resuming[/yellow] encode: {len(completed)}/{len(texts)} rows already cached"
+        )
 
-    hidden = torch.cat(chunks, dim=0)
-    cache.save(sample_ids, hidden)
+    lengths = encoder.token_lengths(texts)
+    if llm_config.deterministic:
+        batch_size = llm_config.batch_size or 8
+        batch_groups = [
+            list(range(start, min(start + batch_size, len(texts))))
+            for start in range(0, len(texts), batch_size)
+        ]
+    else:
+        batch_groups = batch_indices_by_token_budget(
+            lengths,
+            llm_config.max_batch_tokens,
+            llm_config.batch_size,
+        )
+
+    for batch_indices in batch_groups:
+        pending = [idx for idx in batch_indices if idx not in completed]
+        if not pending:
+            continue
+        batch_texts = [texts[i] for i in pending]
+        batch_hidden = encoder.encode_batch(batch_texts)
+        cache.write_rows(pending, batch_hidden)
+
+    cache.finalize(sample_ids, _build_encode_cache_meta(llm_config, verbalizer))
     msg = (
         f"[green]Cached[/green] {len(texts)} vectors "
         f"({cache.expected_bytes} bytes) -> {cache.memmap_path}"

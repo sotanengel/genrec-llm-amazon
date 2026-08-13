@@ -1,0 +1,4 @@
+# See https://docs.github.com/articles/about-codeowners for syntax.
+# Default: everything is owned by the repo maintainer(s) unless overridden
+# by a more specific rule below.
+* @sotanengel

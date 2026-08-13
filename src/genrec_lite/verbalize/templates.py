@@ -9,6 +9,7 @@ from typing import Any
 import polars as pl
 from jinja2 import Template
 
+from genrec_lite.config import VerbalizerYamlConfig
 from genrec_lite.verbalize.base import Sample, TokenBudget
 from genrec_lite.verbalize.budget import count_tokens, truncate_to_budget
 from genrec_lite.verbalize.compress import CompressConfig, compress_history_events
@@ -81,13 +82,19 @@ def _season_from_ts(ts: int) -> str:
     return "Fall"
 
 
+def _build_item_lookup(items: pl.DataFrame) -> dict[int, dict[str, Any]]:
+    return {int(r["item_id"]): r for r in items.iter_rows(named=True)}
+
+
+def _build_user_lookup(users: pl.DataFrame) -> dict[int, dict[str, Any]]:
+    return {int(r["user_id"]): r for r in users.iter_rows(named=True)}
+
+
 def _build_history_events(
     sample: Sample,
-    items: pl.DataFrame,
-    interactions: pl.DataFrame,
+    item_lookup: dict[int, dict[str, Any]],
     config: VerbalizerConfig,
 ) -> list[dict[str, Any]]:
-    item_lookup = {int(r["item_id"]): r for r in items.iter_rows(named=True)}
     history = list(reversed(sample.history))
     events: list[dict[str, Any]] = []
     for item_id in history:
@@ -109,8 +116,7 @@ def _build_history_events(
     return compress_history_events(events, compress_cfg)
 
 
-def _top_categories(history: list[int], items: pl.DataFrame) -> str:
-    item_lookup = {int(r["item_id"]): r for r in items.iter_rows(named=True)}
+def _top_categories(history: list[int], item_lookup: dict[int, dict[str, Any]]) -> str:
     counts: dict[str, int] = {}
     for item_id in history:
         item = item_lookup.get(int(item_id), {})
@@ -125,9 +131,23 @@ class TemplateVerbalizer:
 
     def __init__(self, config: VerbalizerConfig) -> None:
         self._config = config
+        self._items_id: int | None = None
+        self._users_id: int | None = None
+        self._item_lookup: dict[int, dict[str, Any]] = {}
+        self._user_lookup: dict[int, dict[str, Any]] = {}
 
     def name(self) -> str:
         return self._config.name
+
+    def _ensure_lookups(self, items: pl.DataFrame, users: pl.DataFrame) -> None:
+        items_id = id(items)
+        if self._items_id != items_id:
+            self._items_id = items_id
+            self._item_lookup = _build_item_lookup(items)
+        users_id = id(users)
+        if self._users_id != users_id:
+            self._users_id = users_id
+            self._user_lookup = _build_user_lookup(users)
 
     def render(
         self,
@@ -137,18 +157,18 @@ class TemplateVerbalizer:
         interactions: pl.DataFrame,
         budget: TokenBudget,
     ) -> str:
-        user_rows = users.filter(pl.col("user_id") == sample.user_id)
-        user = user_rows.row(0, named=True) if user_rows.height > 0 else {}
+        self._ensure_lookups(items, users)
+        user = self._user_lookup.get(sample.user_id, {})
         first_ts = int(user.get("first_ts", sample.cutoff_ts))
         days_active = max(0, (sample.cutoff_ts - first_ts) // 86400)
         prefix = PREFIX_TEMPLATE.render(
             n_inter=int(user.get("n_inter", len(sample.history))),
             first_seen_relative=f"{days_active}d ago",
             repeat_ratio=f"{float(user.get('repeat_ratio', 0.0)):.2f}",
-            top3_categories=_top_categories(sample.history, items),
+            top3_categories=_top_categories(sample.history, self._item_lookup),
         )
 
-        events = _build_history_events(sample, items, interactions, self._config)
+        events = _build_history_events(sample, self._item_lookup, self._config)
         history_lines: list[str] = []
         for idx, event in enumerate(events, start=1):
             if self._config.variant == "v0_ids_only":
@@ -183,12 +203,35 @@ class TemplateVerbalizer:
                 include_context=self._config.include_context,
                 include_descriptions=False,
             )
-            return TemplateVerbalizer(tighter).render(sample, items, users, interactions, budget)
+            tighter_verbalizer = TemplateVerbalizer(tighter)
+            tighter_verbalizer._items_id = self._items_id
+            tighter_verbalizer._users_id = self._users_id
+            tighter_verbalizer._item_lookup = self._item_lookup
+            tighter_verbalizer._user_lookup = self._user_lookup
+            return tighter_verbalizer.render(sample, items, users, interactions, budget)
         return truncate_to_budget(prompt, budget.max_tokens, budget.tokenizer_name)
 
 
+def build_verbalizer_from_config(cfg: VerbalizerYamlConfig) -> TemplateVerbalizer:
+    """Build a verbalizer that honors YAML settings (max_history, desc_top_k, etc.)."""
+    compress = CompressConfig(
+        max_history=cfg.max_history,
+        desc_top_k=cfg.desc_top_k,
+        title_max_chars=cfg.title_max_chars,
+    )
+    return TemplateVerbalizer(
+        VerbalizerConfig(
+            name=cfg.name,
+            variant=cfg.variant,
+            compress=compress,
+            include_context=cfg.include_context,
+            include_descriptions=cfg.include_descriptions,
+        )
+    )
+
+
 def build_verbalizer(name: str) -> TemplateVerbalizer:
-    """Build a verbalizer from a config name."""
+    """Build a verbalizer from a preset config name."""
     variants = {
         "v0_ids_only": VerbalizerConfig(
             name="v0_ids_only", variant="v0_ids_only", include_context=True

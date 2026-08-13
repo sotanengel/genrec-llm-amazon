@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 SplitStrategy = Literal["leave_one_out", "global_temporal"]
 
@@ -48,13 +48,36 @@ class ExpConfig(BaseModel):
 
 class LLMConfig(BaseModel):
     model_id: str
-    revision: str = "main"
+    revision: str
     license: str
     commercial_use_ok: bool = True
     dtype: str = "bfloat16"
     pooling: Literal["last", "mean", "eos"] = "last"
     max_len: int = 512
     quantize: str | None = None
+    attn_implementation: Literal["auto", "sdpa", "flash_attention_2", "eager"] = "auto"
+    batch_size: int | None = None
+    max_batch_tokens: int = 4096
+    bnb_compute_dtype: str = "bfloat16"
+    device: str = "auto"
+    low_cpu_mem_usage: bool = True
+    deterministic: bool = False
+    trust_remote_code: bool = False
+    gated: bool = False
+    allow_floating_revision: bool = False
+
+    @model_validator(mode="after")
+    def revision_must_be_pinned(self) -> Self:
+        if self.allow_floating_revision:
+            return self
+        if self.revision.strip().lower() in {"main", "master"}:
+            msg = (
+                f"revision '{self.revision}' is a moving branch alias, not a pinned "
+                "commit/tag (DESIGN.md §2.4.4). Pin a concrete revision or set "
+                "allow_floating_revision: true explicitly."
+            )
+            raise ValueError(msg)
+        return self
 
 
 class VerbalizerYamlConfig(BaseModel):
@@ -66,7 +89,7 @@ class VerbalizerYamlConfig(BaseModel):
     desc_top_k: int = 3
     title_max_chars: int = 60
     max_tokens: int = 512
-    tokenizer_name: str = "gpt2"
+    tokenizer_name: str | None = None
 
 
 def _load_yaml(path: Path) -> dict[str, object]:
@@ -114,6 +137,19 @@ def load_exp_config(
     return ExpConfig.model_validate(data)
 
 
+def validate_llm_config_file(path: Path) -> LLMConfig:
+    """Validate a single model YAML against LLMConfig and §2.4.4 contract."""
+    data = _load_yaml(path)
+    if "license" not in data:
+        raise ValueError(f"LLM config must define license: {path}")
+    if "commercial_use_ok" not in data:
+        raise ValueError(f"LLM config must define commercial_use_ok: {path}")
+    try:
+        return LLMConfig.model_validate(data)
+    except ValidationError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+
+
 def load_llm_config(
     model: str,
     config_dir: Path | None = None,
@@ -122,10 +158,7 @@ def load_llm_config(
     model_path = root / "model" / "llm" / f"{model}.yaml"
     if not model_path.exists():
         raise FileNotFoundError(f"LLM config not found: {model_path}")
-    data = _load_yaml(model_path)
-    if "license" not in data:
-        raise ValueError(f"LLM config must define license: {model_path}")
-    return LLMConfig.model_validate(data)
+    return validate_llm_config_file(model_path)
 
 
 def load_verbalizer_config(

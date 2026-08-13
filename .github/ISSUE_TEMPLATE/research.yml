@@ -1,0 +1,39 @@
+name: Research / experiment
+description: An investigation, benchmark, or ablation whose result is itself the deliverable.
+title: "[Research] "
+labels: ["research"]
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Question being investigated
+    validations:
+      required: true
+
+  - type: textarea
+    id: method
+    attributes:
+      label: Method / experiment design
+      description: What will be run, on what data/model, with what metric?
+    validations:
+      required: true
+
+  - type: textarea
+    id: hypothesis
+    attributes:
+      label: Hypothesis (if any)
+
+  - type: textarea
+    id: results
+    attributes:
+      label: Results
+      description: |
+        Fill in once the investigation lands. Per this repo's research-task
+        convention, results should ship together with a PR describing the
+        investigation, this issue updated with the findings, and explicit
+        next steps below.
+
+  - type: textarea
+    id: next-steps
+    attributes:
+      label: Next steps

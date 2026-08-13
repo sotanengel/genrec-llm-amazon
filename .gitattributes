@@ -1,0 +1,25 @@
+# This repo is authored on Windows (core.autocrlf=true) but executed in WSL2.
+# A CRLF line ending in a shell script breaks the shebang inside Linux
+# ("bad interpreter: /usr/bin/env bash^M"), so pin every executable text
+# format to LF regardless of the checkout platform.
+* text=auto eol=lf
+
+*.sh   text eol=lf
+*.bash text eol=lf
+*.py   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.toml text eol=lf
+Makefile text eol=lf
+
+# PowerShell only ever runs on Windows; CRLF is its native form.
+*.ps1 text eol=crlf
+
+# Never touch binary payloads.
+*.parquet binary
+*.npy     binary
+*.memmap  binary
+*.pt      binary
+*.safetensors binary
+*.png binary
+*.jpg binary
