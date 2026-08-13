@@ -1,0 +1,3 @@
+seed: 42
+cold_threshold: 5
+split_strategy: global_temporal

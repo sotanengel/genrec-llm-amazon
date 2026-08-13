@@ -1,0 +1,5 @@
+dataset: amazon_video_games
+category: Video_Games
+split_strategy: global_temporal
+cold_threshold: 5
+output_dir: data/processed/amazon_video_games
