@@ -1,0 +1,34 @@
+# Data (never commit raw or processed data)
+data/raw/
+data/processed/
+cache/
+
+# Run artifacts
+reports/runs/
+
+# Python
+__pycache__/
+.venv/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Models (downloaded locally)
+models/
