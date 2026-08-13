@@ -57,18 +57,41 @@ function Get-RegisteredDistros {
     }
 }
 
+function Test-Provisioned {
+    param([string]$DistroName, [string]$User)
+    # Registration alone is NOT enough: `wsl --install --no-launch` can succeed
+    # while provisioning fails afterwards, leaving a registered-but-unusable
+    # distro. Re-running must then resume at provisioning rather than exiting
+    # early, so probe for the actual end state (user exists + wsl.conf written).
+    # Uses bash -s over stdin (not bash -lc with chained tests) so PS1 files stay
+    # free of PS 5.1 parser-error operators when written literally in this file.
+    $probeTemplate = @'
+set -euo pipefail
+GENREC_USER='__LINUX_USER__'
+id -u "$GENREC_USER" >/dev/null 2>&1
+test -f /etc/wsl.conf
+'@
+    $probeScript = $probeTemplate.Replace('__LINUX_USER__', $User)
+    $probeScript | & wsl.exe -d $DistroName -u root -- bash -s 2>$null | Out-Null
+    return ($LASTEXITCODE -eq 0)
+}
+
 Write-Host "Checking for already-registered WSL distros..."
 $existing = Get-RegisteredDistros
 if ($existing -contains $Distro) {
-    Write-Host "'$Distro' is already registered. Nothing to do."
-    exit 0
+    if (Test-Provisioned -DistroName $Distro -User $LinuxUser) {
+        Write-Host "'$Distro' is already registered and provisioned for user '$LinuxUser'. Nothing to do."
+        exit 0
+    }
+    Write-Host "'$Distro' is registered but not provisioned for '$LinuxUser'. Resuming provisioning..."
 }
-
-Write-Host "'$Distro' not found among: $($existing -join ', '). Installing..."
-& wsl.exe --install -d $Distro --no-launch
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "wsl --install -d $Distro --no-launch failed with exit code $LASTEXITCODE."
-    exit $LASTEXITCODE
+else {
+    Write-Host "'$Distro' not found among: $($existing -join ', '). Installing..."
+    & wsl.exe --install -d $Distro --no-launch
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "wsl --install -d $Distro --no-launch failed with exit code $LASTEXITCODE."
+        exit $LASTEXITCODE
+    }
 }
 
 # The store-backed distro install should not require admin rights on a machine
@@ -87,28 +110,59 @@ Write-Host "Provisioning user '$LinuxUser' non-interactively as root..."
 # Runs as root inside the freshly-installed distro. Uses useradd instead of the
 # interactive first-launch OOBE (which prompts for a username/password on
 # stdin and would hang a scripted run).
-$provisionScript = @"
+#
+# NOTE: this is a SINGLE-quoted here-string, so PowerShell performs no
+# interpolation at all and every '$' below reaches bash intact. The username is
+# substituted afterwards via .Replace() on a placeholder. Using a double-quoted
+# here-string here is a trap: PowerShell's escape character is a backtick, not
+# a backslash, so "\$USERNAME" does NOT escape the '$' -- PowerShell expands the
+# (undefined) $USERNAME to empty and leaves a stray backslash, emitting
+# `id -u "\"` and failing with a bash syntax error.
+$provisionTemplate = @'
 set -euo pipefail
-USERNAME='$LinuxUser'
-if ! id -u "\$USERNAME" >/dev/null 2>&1; then
-  useradd -m -s /bin/bash "\$USERNAME"
+GENREC_USER='__LINUX_USER__'
+if ! id -u "$GENREC_USER" >/dev/null 2>&1; then
+  useradd -m -s /bin/bash "$GENREC_USER"
 fi
 mkdir -p /etc/sudoers.d
-echo "\$USERNAME ALL=(ALL) NOPASSWD:ALL" > "/etc/sudoers.d/90-\$USERNAME"
-chmod 0440 "/etc/sudoers.d/90-\$USERNAME"
-cat > /etc/wsl.conf <<'WSLCONF'
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$GENREC_USER" > "/etc/sudoers.d/90-$GENREC_USER"
+chmod 0440 "/etc/sudoers.d/90-$GENREC_USER"
+cat > /etc/wsl.conf <<WSLCONF
 [user]
-default=$LinuxUser
+default=$GENREC_USER
 [boot]
 systemd=true
 [interop]
 appendWindowsPath=false
 WSLCONF
-"@
+id -u "$GENREC_USER" >/dev/null
+'@
 
-& wsl.exe -d $Distro -u root -- bash -lc $provisionScript
+# Guard against a username bash/useradd would reject (e.g. the default derived
+# from $env:USERNAME on this machine is "na-g-", which ends in a hyphen).
+if ($LinuxUser -notmatch '^[a-z_][a-z0-9_-]*[a-z0-9_]$') {
+    Write-Error "LinuxUser '$LinuxUser' is not a valid Linux username. Pass -LinuxUser explicitly, e.g. -LinuxUser sota."
+    exit 1
+}
+$provisionScript = $provisionTemplate.Replace('__LINUX_USER__', $LinuxUser)
+
+# Pipe the script on stdin so every line reaches bash intact (bash -lc with an
+# unquoted multiline PowerShell string splits into multiple argv tokens).
+$provisionScript | & wsl.exe -d $Distro -u root -- bash -s
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Non-interactive provisioning failed inside '$Distro' with exit code $LASTEXITCODE."
+    exit $LASTEXITCODE
+}
+
+Write-Host "Verifying user '$LinuxUser' was created..."
+$verifyTemplate = @'
+set -euo pipefail
+id -u '__LINUX_USER__' >/dev/null
+'@
+$verifyScript = $verifyTemplate.Replace('__LINUX_USER__', $LinuxUser)
+$verifyScript | & wsl.exe -d $Distro -u root -- bash -s
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "User '$LinuxUser' was not created inside '$Distro' (id -u failed)."
     exit $LASTEXITCODE
 }
 
