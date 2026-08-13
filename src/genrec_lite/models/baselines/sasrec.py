@@ -71,7 +71,12 @@ class SASRecModel(nn.Module):
             torch.ones(seq_len, seq_len, device=seq.device, dtype=torch.bool),
             diagonal=1,
         )
-        return cast(torch.Tensor, self.encoder(x, mask=causal_mask, src_key_padding_mask=padding_mask))
+        encoded = self.encoder(
+            x,
+            mask=causal_mask,
+            src_key_padding_mask=padding_mask,
+        )
+        return cast(torch.Tensor, encoded)
 
     def score_all_items(self, seq: torch.Tensor) -> torch.Tensor:
         """Return scores for all items [B, n_items]."""
