@@ -4,20 +4,23 @@
   "device": "cuda",
   "batch_size": 1,
   "seq_len": 512,
+  "seq_len_actual": 512,
+  "padded_width": 512,
   "padding": "longest",
   "dtype": "bfloat16",
   "quantize": "nf4",
   "steps": 5,
   "warmup": 2,
-  "tok_per_s_padded": 5179.891962103287,
-  "tok_per_s_real": 657.603471751394,
-  "ms_per_batch_p50": 98.8711229999808,
-  "ms_per_batch_p90": 99.4603139999981,
+  "tok_per_s_padded": 1514.936219545943,
+  "tok_per_s_real": 1514.936219545943,
+  "ms_per_batch_p50": 337.54913799999997,
+  "ms_per_batch_p90": 340.6271320000016,
   "memory": {
-    "peak_allocated_gb": 4.517736911773682,
+    "peak_allocated_gb": 4.6480536460876465,
     "peak_reserved_gb": 4.69921875,
     "free_gb": 2.22265625,
     "total_gb": 7.99951171875
   },
-  "timestamp": "2026-08-13T13:40:53.895845+00:00"
+  "timestamp": "2026-08-13T23:22:08.711486+00:00",
+  "warning": null
 }
