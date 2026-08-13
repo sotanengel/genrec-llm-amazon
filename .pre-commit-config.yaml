@@ -6,17 +6,42 @@ repos:
         args: [--fix]
       - id: ruff-format
 
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        # Default 500KB is smaller than uv.lock's realistic size for this
+        # dependency tree (~550KB and growing); 2MB still catches accidental
+        # commits of model checkpoints / data dumps, which is the actual risk
+        # in an ML repo.
+        args: [--maxkb=2048]
+
   - repo: local
     hooks:
+      # `make typecheck` / `make test-precommit` are the single source of
+      # truth for these commands (also used by CI) — see issue #13, P2/P6.
+      # They use `uv run --frozen`, which fails fast on a stale/missing lock
+      # instead of silently re-resolving the whole dependency tree.
       - id: mypy
         name: mypy
-        entry: uv run mypy --config-file=pyproject.toml --strict --explicit-package-bases src
+        entry: make typecheck
         language: system
         pass_filenames: false
         always_run: true
       - id: pytest-fast
         name: pytest-fast
-        entry: uv run pytest -x --timeout=10 tests/ -m "not slow"
+        entry: make test-precommit
         language: system
         pass_filenames: false
         always_run: true
+      - id: check-model-configs
+        name: check-model-configs
+        entry: make check-model-configs
+        language: system
+        pass_filenames: false
+        files: ^configs/model/llm/.*\.ya?ml$

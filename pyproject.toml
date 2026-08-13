@@ -18,9 +18,9 @@ dependencies = [
     "pyyaml>=6.0",
     "rich>=13.0",
     "datasets>=2.19",
-    "torch>=2.2",
+    "torch>=2.4",
     "pandas>=2.0",
-    "transformers>=4.40",
+    "transformers>=4.57,<5",
     "jinja2>=3.1",
 ]
 
@@ -28,18 +28,46 @@ dependencies = [
 embed = [
     "sentence-transformers>=3.0",
 ]
-dev = [
-    "pytest>=8.0",
-    "pytest-xdist>=3.5",
-    "pytest-timeout>=2.3",
-    "ruff>=0.4",
-    "mypy>=1.10",
-    "pre-commit>=3.7",
-    "types-PyYAML>=6.0",
+# CPU-only CI never installs this extra. Local/WSL GPU workflows opt in explicitly
+# (e.g. `uv sync --extra gpu`), which is what fixes the previously-undeclared
+# `bitsandbytes` import in src/genrec_lite/encode/prefill.py.
+gpu = [
+    "accelerate>=0.30",
+    "bitsandbytes>=0.43",
+    "hf_transfer>=0.1",
+]
+flash = [
+    "flash-attn>=2.6",
 ]
 
 [project.scripts]
 genrec-lite = "genrec_lite.cli:app"
+
+# --- Dev tooling lives here (PEP 735), not in [project.optional-dependencies]. ---
+# `uv sync` / `uv run` install the base project deps plus the "dev" group by
+# default, which is exactly why the group below is named "dev": it makes
+# `uv run mypy ...` / `uv run pytest ...` work out of the box with no extra
+# flags, no accidental multi-GB re-resolve, and no dependence on a `.venv`
+# that happens to already have dev extras installed (see issue #13, P2).
+[dependency-groups]
+# Pinned (not floored) so the ruff version used by `uv run ruff` / CI is
+# provably identical to the `rev:` pinned in .pre-commit-config.yaml.
+# tests/test_toolchain_consistency.py enforces this at test time.
+lint = [
+    "ruff==0.16.2",
+    "mypy==1.18.*",
+    "types-PyYAML>=6.0",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-xdist>=3.5",
+    "pytest-timeout>=2.3",
+]
+dev = [
+    { include-group = "lint" },
+    { include-group = "test" },
+    "pre-commit>=3.7",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/genrec_lite"]
@@ -52,6 +80,14 @@ target-version = "py311"
 select = ["E", "F", "I", "W", "UP", "B"]
 
 [tool.mypy]
+# Intentionally pinned to the *upper* end of the CI matrix (3.11 + 3.12), not
+# the requires-python floor (">=3.11"). Setting this to "3.11" makes mypy
+# reject numpy's own bundled type stubs (numpy/__init__.pyi uses PEP 695
+# `type X = ...` aliases unconditionally), which is a hard failure unrelated
+# to this project's code: "Type statement is only supported in Python 3.12
+# and greater". `follow_imports`/`ignore_missing_imports` overrides for numpy
+# do not avoid it because the parse error happens before those apply. This
+# was "3.12" before with no explanation; now it stays "3.12" deliberately.
 python_version = "3.12"
 strict = true
 warn_return_any = true
@@ -67,5 +103,22 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "network: marks tests that require network access (e.g. HuggingFace Hub downloads); auto-applied to tests using the tiny_model_id fixture and auto-skipped when HF_HUB_OFFLINE=1 or GENREC_NO_NETWORK=1 is set",
+    "gpu: marks tests that require a CUDA device; auto-skipped when torch.cuda.is_available() is False",
+    "integration: marks broader integration-style tests spanning multiple modules",
 ]
-addopts = "-ra"
+addopts = "-ra --strict-markers --strict-config"
+
+# transformers>=4.57 (raised floor, issue #13) ships inline type stubs whose
+# AutoTokenizer.from_pretrained signature mypy now treats as an untyped call
+# returning Any, which it did not under the old >=4.40 floor. The call sites
+# live in src/genrec_lite/verbalize/budget.py and
+# src/genrec_lite/encode/prefill.py, which this work unit does not own (see
+# issue #13 report). Narrowly relax just these two modules rather than
+# weakening --strict project-wide; remove once the owning unit adds an
+# explicit return-type annotation / cast at the call site.
+[[tool.mypy.overrides]]
+module = ["genrec_lite.verbalize.budget", "genrec_lite.encode.prefill"]
+disallow_untyped_calls = false
+warn_return_any = false
+warn_unused_ignores = false
