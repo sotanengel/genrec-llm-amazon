@@ -78,9 +78,7 @@ def gini_at_k(recommended: list[list[int]], n_items: int, k: int) -> float:
     sorted_counts = np.sort(counts)
     n = len(sorted_counts)
     index = np.arange(1, n + 1)
-    return float(
-        (2 * np.sum(index * sorted_counts) / (n * np.sum(sorted_counts))) - (n + 1) / n
-    )
+    return float((2 * np.sum(index * sorted_counts) / (n * np.sum(sorted_counts))) - (n + 1) / n)
 
 
 def avg_popularity_at_k(

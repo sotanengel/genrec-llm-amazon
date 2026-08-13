@@ -46,6 +46,29 @@ class ExpConfig(BaseModel):
     sasrec: SasrecConfig = Field(default_factory=SasrecConfig)
 
 
+class LLMConfig(BaseModel):
+    model_id: str
+    revision: str = "main"
+    license: str
+    commercial_use_ok: bool = True
+    dtype: str = "bfloat16"
+    pooling: Literal["last", "mean", "eos"] = "last"
+    max_len: int = 512
+    quantize: str | None = None
+
+
+class VerbalizerYamlConfig(BaseModel):
+    name: str
+    variant: str = "v1_full"
+    include_context: bool = True
+    include_descriptions: bool = True
+    max_history: int = 20
+    desc_top_k: int = 3
+    title_max_chars: int = 60
+    max_tokens: int = 512
+    tokenizer_name: str = "gpt2"
+
+
 def _load_yaml(path: Path) -> dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -89,6 +112,33 @@ def load_exp_config(
         raise FileNotFoundError(f"Experiment config not found: {exp_path}")
     data = _load_yaml(exp_path)
     return ExpConfig.model_validate(data)
+
+
+def load_llm_config(
+    model: str,
+    config_dir: Path | None = None,
+) -> LLMConfig:
+    root = config_dir or Path("configs")
+    model_path = root / "model" / "llm" / f"{model}.yaml"
+    if not model_path.exists():
+        raise FileNotFoundError(f"LLM config not found: {model_path}")
+    data = _load_yaml(model_path)
+    if "license" not in data:
+        raise ValueError(f"LLM config must define license: {model_path}")
+    return LLMConfig.model_validate(data)
+
+
+def load_verbalizer_config(
+    verbalizer: str,
+    config_dir: Path | None = None,
+) -> VerbalizerYamlConfig:
+    root = config_dir or Path("configs")
+    verb_path = root / "verbalizer" / f"{verbalizer}.yaml"
+    if not verb_path.exists():
+        raise FileNotFoundError(f"Verbalizer config not found: {verb_path}")
+    data = _load_yaml(verb_path)
+    data["name"] = verbalizer
+    return VerbalizerYamlConfig.model_validate(data)
 
 
 def find_project_root(start: Path | None = None) -> Path:

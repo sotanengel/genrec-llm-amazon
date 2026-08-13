@@ -1,0 +1,5 @@
+dataset: amazon_video_games_literature
+category: Video_Games
+split_strategy: leave_one_out
+cold_threshold: 5
+output_dir: data/processed/amazon_video_games_literature

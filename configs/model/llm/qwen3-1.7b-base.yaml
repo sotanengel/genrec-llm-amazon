@@ -1,0 +1,8 @@
+model_id: Qwen/Qwen3-1.7B-Base
+revision: main
+license: Apache-2.0
+commercial_use_ok: true
+dtype: bfloat16
+pooling: last
+max_len: 512
+quantize: null

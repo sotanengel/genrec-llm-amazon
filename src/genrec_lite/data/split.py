@@ -16,10 +16,7 @@ SPLIT_TEST = 2
 def apply_leave_one_out(interactions: pl.DataFrame) -> pl.DataFrame:
     """Per-user: last interaction -> test, second-last -> valid, rest -> train."""
     ranked = interactions.with_columns(
-        pl.col("ts")
-        .rank(method="ordinal", descending=True)
-        .over("user_id")
-        .alias("_rank_desc")
+        pl.col("ts").rank(method="ordinal", descending=True).over("user_id").alias("_rank_desc")
     )
     return ranked.with_columns(
         pl.when(pl.col("_rank_desc") == 1)
@@ -140,13 +137,16 @@ def build_samples(
             )
             sample_id += 1
 
-    return pl.DataFrame(rows, schema={
-        "sample_id": pl.Int64,
-        "user_id": pl.Int32,
-        "cutoff_ts": pl.Int64,
-        "target_item": pl.Int32,
-        "history": pl.List(pl.Int32),
-        "split": pl.Int8,
-        "is_repeat": pl.Boolean,
-        "target_is_cold": pl.Boolean,
-    })
+    return pl.DataFrame(
+        rows,
+        schema={
+            "sample_id": pl.Int64,
+            "user_id": pl.Int32,
+            "cutoff_ts": pl.Int64,
+            "target_item": pl.Int32,
+            "history": pl.List(pl.Int32),
+            "split": pl.Int8,
+            "is_repeat": pl.Boolean,
+            "target_is_cold": pl.Boolean,
+        },
+    )

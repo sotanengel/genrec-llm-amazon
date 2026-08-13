@@ -17,7 +17,7 @@ from genrec_lite.eval.metrics import (
     gini_at_k,
     novelty_at_k,
 )
-from genrec_lite.eval.slices import DEFAULT_SLICES, assign_slice, filter_slice
+from genrec_lite.eval.slices import all_slice_names, assign_slice, filter_slice
 
 
 def _scores_to_rankings(scores: np.ndarray) -> list[list[int]]:
@@ -30,11 +30,13 @@ def evaluate(
     items: pl.DataFrame,
     interactions: pl.DataFrame,
     ks: tuple[int, ...] = (10, 20),
-    slices: tuple[str, ...] = DEFAULT_SLICES,
+    slices: tuple[str, ...] | None = None,
     cold_threshold: int = 5,
     method: str = "unknown",
 ) -> pd.DataFrame:
     """Evaluate a scoring function with full-catalog ranking."""
+    if slices is None:
+        slices = all_slice_names(cold_threshold=cold_threshold)
     n_items = items.height
     enriched = assign_slice(samples, items, interactions, cold_threshold=cold_threshold)
 

@@ -1,0 +1,9 @@
+name: v3_no_context
+variant: v1_full
+include_context: false
+include_descriptions: true
+max_history: 20
+desc_top_k: 3
+title_max_chars: 60
+max_tokens: 512
+tokenizer_name: gpt2
