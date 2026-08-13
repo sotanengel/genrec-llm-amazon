@@ -23,25 +23,29 @@ repos:
 
   - repo: local
     hooks:
-      # `make typecheck` / `make test-precommit` are the single source of
-      # truth for these commands (also used by CI) — see issue #13, P2/P6.
-      # They use `uv run --frozen`, which fails fast on a stale/missing lock
-      # instead of silently re-resolving the whole dependency tree.
+      # scripts/dev.py holds the single definition of each command; the
+      # Makefile delegates to the same tasks (issue #13, P2/P6). These hooks
+      # call it directly rather than via `make`, because `make` does not exist
+      # on Windows, where this repo is authored — going through make made every
+      # local commit fail with "Executable `make` not found".
+      #
+      # `uv run --frozen` fails fast on a stale/missing lock instead of
+      # silently re-resolving the whole (torch-sized) dependency tree.
       - id: mypy
         name: mypy
-        entry: make typecheck
+        entry: uv run --frozen python scripts/dev.py typecheck
         language: system
         pass_filenames: false
         always_run: true
       - id: pytest-fast
         name: pytest-fast
-        entry: make test-precommit
+        entry: uv run --frozen python scripts/dev.py test-precommit
         language: system
         pass_filenames: false
         always_run: true
       - id: check-model-configs
         name: check-model-configs
-        entry: make check-model-configs
+        entry: uv run --frozen python scripts/dev.py check-model-configs
         language: system
         pass_filenames: false
         files: ^configs/model/llm/.*\.ya?ml$

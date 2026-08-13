@@ -17,64 +17,46 @@ lock:
 lock-upgrade:
 	uv lock --upgrade
 
+# Every check below delegates to scripts/dev.py, which holds the single
+# definition of each command. `make` does not exist on Windows (where this repo
+# is authored) but pre-commit still has to run there, so the hooks call dev.py
+# directly rather than going through make — see scripts/dev.py's docstring.
+#
 # CI's `pre-commit` job runs `pre-commit run --all-files`, which invokes the
-# ruff-pre-commit hooks directly (not this target) so that ruff only ever
-# runs from one place/version. This target exists for local convenience and
-# is guaranteed to use the *same* pinned ruff version
-# (tests/test_toolchain_consistency.py enforces that pin equality).
+# ruff-pre-commit hooks directly (not these targets) so that ruff only ever
+# runs from one place/version; tests/test_toolchain_consistency.py enforces
+# that the pinned ruff version matches the hook's rev.
+DEV := uv run --frozen python scripts/dev.py
+
 lint:
-	uv run --frozen ruff check src tests scripts
+	$(DEV) lint
 
 format:
-	uv run --frozen ruff format src tests scripts
+	$(DEV) format
 
 format-check:
-	uv run --frozen ruff format --check src tests scripts
+	$(DEV) format-check
 
-# mypy --strict covers src and scripts, which are clean today. tests/ is
-# intentionally excluded: enabling --strict there surfaces ~100 pre-existing
-# type errors in test files this work unit does not own (see issue #13
-# report). Flagged for a follow-up unit to either fix or scope down.
 typecheck:
-	uv run --frozen mypy --config-file=pyproject.toml --strict --explicit-package-bases src scripts
+	$(DEV) typecheck
 
 check-model-configs:
-	uv run --frozen python scripts/check_model_configs.py configs/model/llm
+	$(DEV) check-model-configs
 
-# Fast loop: excludes slow tests. Network tests (see the `network` marker in
-# pyproject.toml) run unless HF_HUB_OFFLINE=1 / GENREC_NO_NETWORK=1 is set.
 test-fast:
-	uv run --frozen pytest -x -n auto --timeout=60 tests/ -m "not slow"
+	$(DEV) test-fast
 
-# CPU-only sweep: excludes slow and gpu explicitly (gpu also auto-skips via
-# conftest.py when torch.cuda.is_available() is False, this just documents
-# intent for CI).
 test-cpu:
-	uv run --frozen pytest -n auto --timeout=60 tests/ -m "not slow and not gpu"
+	$(DEV) test-cpu
 
-# What the local pre-commit pytest hook runs: offline-safe (network tests are
-# auto-skipped, not attempted) so you can commit without a network connection
-# (see issue #13, P4).
 test-precommit:
-	GENREC_NO_NETWORK=1 uv run --frozen pytest -x -n auto --timeout=60 tests/ -m "not slow"
+	$(DEV) test-precommit
 
-# No test currently carries @pytest.mark.slow (see issue #13 report: this
-# unit does not own any tests/test_*.py file to apply the marker to). Until
-# one does, `pytest -m slow` legitimately collects 0 tests and exits 5;
-# tolerate that specific case rather than treating it as a target failure.
 test-slow:
-	uv run --frozen pytest tests/ -m slow --timeout=600; \
-	code=$$?; \
-	if [ $$code -eq 5 ]; then \
-		echo "no tests marked 'slow' yet (see issue #13) - tolerating pytest exit 5"; \
-		exit 0; \
-	fi; \
-	exit $$code
+	$(DEV) test-slow
 
-# GPU-only tests never run in CI (GitHub-hosted runners have no CUDA device);
-# run locally, typically in WSL.
 test-gpu:
-	uv run --frozen pytest tests/ -m gpu --timeout=600
+	$(DEV) test-gpu
 
 data-prepare:
 	uv run --frozen python -m genrec_lite data prepare --dataset amazon_video_games
