@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import random
+import subprocess
+from datetime import UTC, datetime
 from typing import Any
 
 import numpy as np
@@ -14,6 +16,7 @@ import typer
 from rich.console import Console
 
 from genrec_lite.config import (
+    LLMConfig,
     VerbalizerYamlConfig,
     find_project_root,
     load_data_config,
@@ -26,7 +29,7 @@ from genrec_lite.data.schema import read_parquet_bundle
 from genrec_lite.data.stats import print_stats
 from genrec_lite.encode.batching import batch_indices_by_token_budget
 from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
-from genrec_lite.encode.prefill import PrefillEncoder
+from genrec_lite.encode.prefill import ENCODER_VERSION, PrefillEncoder
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
 from genrec_lite.report.build import (
@@ -208,6 +211,38 @@ def _resolve_tokenizer_name(
     return "gpt2"
 
 
+def _build_encode_cache_meta(llm_config: LLMConfig, verbalizer: str) -> dict[str, Any]:
+    import transformers
+
+    meta: dict[str, Any] = {
+        "verbalizer": verbalizer,
+        "transformers_version": transformers.__version__,
+        "torch_version": torch.__version__,
+        "timestamp": datetime.now(UTC).isoformat(),
+        "model_id": llm_config.model_id,
+        "revision": llm_config.revision,
+        "dtype": llm_config.dtype,
+        "quantize": llm_config.quantize,
+        "pooling": llm_config.pooling,
+        "attn_implementation": llm_config.attn_implementation,
+        "deterministic": llm_config.deterministic,
+        "encoder_version": ENCODER_VERSION,
+        "batch_size": llm_config.batch_size,
+        "max_batch_tokens": llm_config.max_batch_tokens,
+    }
+    try:
+        meta["git_sha"] = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        meta["git_sha"] = "unknown"
+    if torch.cuda.is_available():
+        meta["gpu_name"] = torch.cuda.get_device_name(0)
+    return meta
+
+
 def _sample_from_row(row: dict[str, Any]) -> Sample:
     return Sample(
         user_id=int(row["user_id"]),
@@ -294,15 +329,28 @@ def encode_run(
     cache_key = compute_cache_key(
         CacheKeyConfig(
             model_id=llm_config.model_id,
+            revision=llm_config.revision,
             verbalizer_name=verbalizer,
             verbalizer_config=verb_config.model_dump(),
             max_len=llm_config.max_len,
+            dtype=llm_config.dtype,
+            quantize=llm_config.quantize,
+            pooling=llm_config.pooling,
+            attn_implementation=llm_config.attn_implementation,
+            deterministic=llm_config.deterministic,
+            encoder_version=ENCODER_VERSION,
         )
     )
     cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim)
     if cache.exists():
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
         raise typer.Exit(code=0)
+
+    completed = cache.completed_rows()
+    if completed:
+        console.print(
+            f"[yellow]Resuming[/yellow] encode: {len(completed)}/{len(texts)} rows already cached"
+        )
 
     lengths = encoder.token_lengths(texts)
     if llm_config.deterministic:
@@ -318,14 +366,15 @@ def encode_run(
             llm_config.batch_size,
         )
 
-    hidden = torch.empty((len(texts), hidden_dim), dtype=torch.float32)
     for batch_indices in batch_groups:
-        batch_texts = [texts[i] for i in batch_indices]
+        pending = [idx for idx in batch_indices if idx not in completed]
+        if not pending:
+            continue
+        batch_texts = [texts[i] for i in pending]
         batch_hidden = encoder.encode_batch(batch_texts)
-        for offset, row_idx in enumerate(batch_indices):
-            hidden[row_idx] = batch_hidden[offset]
+        cache.write_rows(pending, batch_hidden)
 
-    cache.save(sample_ids, hidden)
+    cache.finalize(sample_ids, _build_encode_cache_meta(llm_config, verbalizer))
     msg = (
         f"[green]Cached[/green] {len(texts)} vectors "
         f"({cache.expected_bytes} bytes) -> {cache.memmap_path}"

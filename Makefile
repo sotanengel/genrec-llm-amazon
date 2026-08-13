@@ -1,5 +1,6 @@
 .PHONY: install lock lock-upgrade lint format format-check typecheck \
 	check-model-configs test-fast test-cpu test-precommit test-slow test-gpu \
+	bench-prefill check-vram profile-verbalize wsl-doctor \
 	data-prepare data-stats eval-baselines report verbalize-samples encode validate-sasrec
 
 # Dev tooling lives in [dependency-groups] (pyproject.toml), synced by `uv sync`
@@ -57,6 +58,18 @@ test-slow:
 
 test-gpu:
 	$(DEV) test-gpu
+
+bench-prefill:
+	$(DEV) bench-prefill
+
+check-vram:
+	$(DEV) check-vram
+
+profile-verbalize:
+	$(DEV) profile-verbalize
+
+wsl-doctor:
+	powershell -NoProfile -ExecutionPolicy Bypass -File scripts/wsl/Invoke-Wsl.ps1 -Command "scripts/wsl/doctor.sh"
 
 data-prepare:
 	uv run --frozen python -m genrec_lite data prepare --dataset amazon_video_games

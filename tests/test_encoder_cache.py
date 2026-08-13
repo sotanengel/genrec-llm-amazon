@@ -7,36 +7,59 @@ from pathlib import Path
 import torch
 
 from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
+from genrec_lite.encode.prefill import ENCODER_VERSION
+
+
+def _base_key_config(**overrides: object) -> CacheKeyConfig:
+    defaults: dict[str, object] = {
+        "model_id": "m",
+        "revision": "abc123",
+        "verbalizer_name": "v1_full",
+        "verbalizer_config": {"max_history": 20},
+        "max_len": 512,
+        "dtype": "bfloat16",
+        "quantize": None,
+        "pooling": "last",
+        "attn_implementation": "auto",
+        "deterministic": False,
+        "encoder_version": ENCODER_VERSION,
+    }
+    defaults.update(overrides)
+    return CacheKeyConfig(**defaults)  # type: ignore[arg-type]
 
 
 def test_key_changes_with_model_id() -> None:
-    base = {"verbalizer_name": "v1_full", "verbalizer_config": {"max_history": 20}, "max_len": 512}
-    k1 = compute_cache_key(CacheKeyConfig(model_id="model-a", **base))
-    k2 = compute_cache_key(CacheKeyConfig(model_id="model-b", **base))
+    k1 = compute_cache_key(_base_key_config(model_id="model-a"))
+    k2 = compute_cache_key(_base_key_config(model_id="model-b"))
     assert k1 != k2
 
 
 def test_key_changes_with_verbalizer_name() -> None:
-    base = {"model_id": "m", "verbalizer_config": {"max_history": 20}, "max_len": 512}
-    k1 = compute_cache_key(CacheKeyConfig(verbalizer_name="v1_full", **base))
-    k2 = compute_cache_key(CacheKeyConfig(verbalizer_name="v0_ids_only", **base))
+    k1 = compute_cache_key(_base_key_config(verbalizer_name="v1_full"))
+    k2 = compute_cache_key(_base_key_config(verbalizer_name="v0_ids_only"))
     assert k1 != k2
 
 
 def test_key_changes_with_verbalizer_config() -> None:
-    base = {"model_id": "m", "verbalizer_name": "v1_full", "max_len": 512}
-    k1 = compute_cache_key(CacheKeyConfig(verbalizer_config={"max_history": 20}, **base))
-    k2 = compute_cache_key(CacheKeyConfig(verbalizer_config={"max_history": 10}, **base))
+    k1 = compute_cache_key(_base_key_config(verbalizer_config={"max_history": 20}))
+    k2 = compute_cache_key(_base_key_config(verbalizer_config={"max_history": 10}))
+    assert k1 != k2
+
+
+def test_key_changes_with_dtype_and_quantize() -> None:
+    k1 = compute_cache_key(_base_key_config(dtype="bfloat16", quantize=None))
+    k2 = compute_cache_key(_base_key_config(dtype="bfloat16", quantize="nf4"))
+    assert k1 != k2
+
+
+def test_key_changes_with_encoder_version() -> None:
+    k1 = compute_cache_key(_base_key_config(encoder_version=1))
+    k2 = compute_cache_key(_base_key_config(encoder_version=2))
     assert k1 != k2
 
 
 def test_key_stable_across_process() -> None:
-    cfg = CacheKeyConfig(
-        model_id="m",
-        verbalizer_name="v1_full",
-        verbalizer_config={"max_history": 20},
-        max_len=512,
-    )
+    cfg = _base_key_config()
     assert compute_cache_key(cfg) == compute_cache_key(cfg)
 
 
@@ -46,6 +69,27 @@ def test_cache_hit_returns_bit_identical(tmp_path: Path) -> None:
     cache.save([1, 2], hidden)
     loaded = cache.load()
     assert torch.equal(loaded.to(torch.float32), hidden)
+
+
+def test_write_rows_and_finalize_roundtrip(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "stream", n_samples=3, hidden_dim=2)
+    cache.write_rows([2], torch.tensor([[1.0, 2.0]]))
+    cache.write_rows([0, 1], torch.tensor([[3.0, 4.0], [5.0, 6.0]]))
+    cache.finalize([10, 11, 12], meta={"model_id": "m", "revision": "abc"})
+    loaded = cache.load()
+    expected = torch.tensor([[3.0, 4.0], [5.0, 6.0], [1.0, 2.0]])
+    assert torch.equal(loaded.to(torch.float32), expected)
+    assert cache.meta_path.exists()
+
+
+def test_resume_after_partial_write(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "resume", n_samples=2, hidden_dim=2)
+    cache.write_rows([0], torch.tensor([[1.0, 2.0]]))
+    assert cache.rows_written() == 1
+    assert not cache.exists()
+    cache.write_rows([1], torch.tensor([[3.0, 4.0]]))
+    cache.finalize([1, 2])
+    assert cache.exists()
 
 
 def test_cache_miss_recomputes(tmp_path: Path) -> None:

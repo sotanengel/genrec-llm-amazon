@@ -92,6 +92,19 @@ TASKS: dict[str, Task] = {
     # GPU tests never run on GitHub-hosted runners (no CUDA device); this is the
     # local/WSL gate.
     "test-gpu": Task(["pytest", "tests/", "-m", "gpu", "--timeout", SLOW_TIMEOUT]),
+    "bench-prefill": Task(
+        [
+            sys.executable,
+            "scripts/bench_prefill.py",
+            "--dry-run-cpu",
+            "--steps",
+            "1",
+            "--warmup",
+            "0",
+        ]
+    ),
+    "check-vram": Task([sys.executable, "scripts/check_vram.py", "--help"]),
+    "profile-verbalize": Task([sys.executable, "scripts/profile_verbalize.py", "--help"]),
 }
 
 
