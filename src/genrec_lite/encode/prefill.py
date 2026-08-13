@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Literal
 
 import torch
@@ -20,6 +21,15 @@ from genrec_lite.encode.backend import (
 logger = logging.getLogger(__name__)
 
 PoolingMode = Literal["last", "mean", "eos"]
+PaddingMode = Literal["max_length", "longest"]
+
+# Bump when numerically meaningful encoder behavior changes (issue #9).
+ENCODER_VERSION = 2
+
+
+def compute_position_ids(attention_mask: Tensor) -> Tensor:
+    """Return left-pad-aware position ids so real tokens always occupy 0..L-1."""
+    return (attention_mask.cumsum(dim=-1) - 1).clamp(min=0)
 
 
 class PrefillEncoder:
@@ -39,12 +49,14 @@ class PrefillEncoder:
         low_cpu_mem_usage: bool = True,
         bnb_compute_dtype: str = "bfloat16",
         trust_remote_code: bool = False,
+        deterministic: bool = False,
     ) -> None:
         self.model_id = model_id
         self.pooling = pooling
         self.max_len = max_len
         self.device = resolve_device(device)
         self.revision = revision
+        self.deterministic = deterministic or os.environ.get("GENREC_DETERMINISTIC") == "1"
 
         torch_dtype = resolve_dtype(dtype)
         from_pretrained_common: dict[str, object] = {}
@@ -81,6 +93,9 @@ class PrefillEncoder:
         if not uses_quant:
             self.model.to(self.device)
 
+        if self.deterministic and self.device != "cpu":
+            torch.use_deterministic_algorithms(True)
+
     @classmethod
     def from_config(cls, cfg: LLMConfig, device: str | None = None) -> PrefillEncoder:
         return cls(
@@ -95,7 +110,11 @@ class PrefillEncoder:
             low_cpu_mem_usage=cfg.low_cpu_mem_usage,
             bnb_compute_dtype=cfg.bnb_compute_dtype,
             trust_remote_code=cfg.trust_remote_code,
+            deterministic=cfg.deterministic,
         )
+
+    def _padding_mode(self) -> PaddingMode:
+        return "max_length" if self.deterministic else "longest"
 
     def _pool(self, hidden: Tensor, attention_mask: Tensor) -> Tensor:
         seq_len = attention_mask.shape[1]
@@ -113,16 +132,27 @@ class PrefillEncoder:
         return hidden[batch_idx, last_indices]
 
     @torch.no_grad()
-    def encode_batch(self, texts: list[str]) -> Tensor:
+    def encode_batch(self, texts: list[str], *, padding: PaddingMode | None = None) -> Tensor:
+        pad_mode: PaddingMode = padding or self._padding_mode()
         encoded = self.tokenizer(
             texts,
-            padding="max_length",
+            padding=pad_mode,
             truncation=True,
             max_length=self.max_len,
             return_tensors="pt",
         )
         encoded = {k: v.to(self.device) for k, v in encoded.items()}
-        outputs = self.model(**encoded, output_hidden_states=False)
+        encoded["position_ids"] = compute_position_ids(encoded["attention_mask"])
+        outputs = self.model(**encoded, output_hidden_states=False, use_cache=False)
         hidden = outputs.last_hidden_state
         pooled = self._pool(hidden, encoded["attention_mask"])
         return pooled.cpu()
+
+    def token_lengths(self, texts: list[str]) -> list[int]:
+        encoded = self.tokenizer(
+            texts,
+            padding=False,
+            truncation=True,
+            max_length=self.max_len,
+        )
+        return [len(ids) for ids in encoded["input_ids"]]

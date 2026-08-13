@@ -24,6 +24,7 @@ from genrec_lite.config import (
 from genrec_lite.data.loaders.amazon import prepare_amazon_dataset
 from genrec_lite.data.schema import read_parquet_bundle
 from genrec_lite.data.stats import print_stats
+from genrec_lite.encode.batching import batch_indices_by_token_budget
 from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
 from genrec_lite.encode.prefill import PrefillEncoder
 from genrec_lite.eval.runner import evaluate
@@ -288,13 +289,7 @@ def encode_run(
         texts.append(renderer.render(sample, items, users, interactions, budget))
         sample_ids.append(int(row["sample_id"]))
 
-    encoder = PrefillEncoder(
-        model_id=llm_config.model_id,
-        dtype=llm_config.dtype,
-        pooling=llm_config.pooling,
-        max_len=llm_config.max_len,
-        quantize=llm_config.quantize,
-    )
+    encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])
     cache_key = compute_cache_key(
         CacheKeyConfig(
@@ -309,13 +304,27 @@ def encode_run(
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
         raise typer.Exit(code=0)
 
-    batch_size = 8
-    chunks: list[Any] = []
-    for start in range(0, len(texts), batch_size):
-        batch = texts[start : start + batch_size]
-        chunks.append(encoder.encode_batch(batch))
+    lengths = encoder.token_lengths(texts)
+    if llm_config.deterministic:
+        batch_size = llm_config.batch_size or 8
+        batch_groups = [
+            list(range(start, min(start + batch_size, len(texts))))
+            for start in range(0, len(texts), batch_size)
+        ]
+    else:
+        batch_groups = batch_indices_by_token_budget(
+            lengths,
+            llm_config.max_batch_tokens,
+            llm_config.batch_size,
+        )
 
-    hidden = torch.cat(chunks, dim=0)
+    hidden = torch.empty((len(texts), hidden_dim), dtype=torch.float32)
+    for batch_indices in batch_groups:
+        batch_texts = [texts[i] for i in batch_indices]
+        batch_hidden = encoder.encode_batch(batch_texts)
+        for offset, row_idx in enumerate(batch_indices):
+            hidden[row_idx] = batch_hidden[offset]
+
     cache.save(sample_ids, hidden)
     msg = (
         f"[green]Cached[/green] {len(texts)} vectors "

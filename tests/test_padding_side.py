@@ -41,6 +41,13 @@ def test_batch_invariance(encoder: PrefillEncoder) -> None:
     assert torch.allclose(full, stacked, atol=1e-4)
 
 
+def test_dynamic_padding_matches_max_length_with_position_ids(encoder: PrefillEncoder) -> None:
+    texts = ["hello world", "hello world this is a longer sentence for padding"]
+    longest = encoder.encode_batch(texts, padding="longest")
+    max_length = encoder.encode_batch(texts, padding="max_length")
+    assert torch.allclose(longest, max_length, atol=1e-4)
+
+
 def test_eos_pooling_finds_correct_position(tiny_model_id: str) -> None:
     encoder = PrefillEncoder(
         model_id=tiny_model_id,
