@@ -6,6 +6,16 @@ cache/
 # Run artifacts
 reports/runs/
 
+# Secrets and large binary artifacts (issue #13)
+.env
+*.safetensors
+*.pt
+*.npy
+*.memmap
+
+# reports/bench/*.json is deliberately NOT ignored above (or anywhere below):
+# those files are committed as measurement evidence, not run output.
+
 # Python
 __pycache__/
 .venv/
