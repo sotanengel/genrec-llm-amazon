@@ -66,7 +66,7 @@ test = [
 dev = [
     { include-group = "lint" },
     { include-group = "test" },
-    "pre-commit>=3.7",
+    "pre-commit>=4.6.2",
 ]
 
 [tool.hatch.build.targets.wheel]
