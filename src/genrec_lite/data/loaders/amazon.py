@@ -237,14 +237,19 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
     meta_records: list[dict[str, Any]] = []
     meta_asins: set[str] = set()
 
+    # `raw_review_{category}` is already a category-specific shard, so accept
+    # every row without an in-Python `main_category` filter. Historical Amazon
+    # Reviews 2023 records use the human-readable "Video Games" (space) whereas
+    # the config name uses "Video_Games" (underscore), so the equality check
+    # dropped every record and raised "No reviews found".
     for row in reviews:
-        if row.get("main_category") == category or category in str(row.get("categories", "")):
-            review_records.append(dict(row))
+        review_records.append(dict(row))
 
+    # Same rationale as for reviews above -- `raw_meta_{category}` is already
+    # category-specific.
     for row in meta:
-        if row.get("main_category") == category:
-            meta_records.append(dict(row))
-            meta_asins.add(row["parent_asin"])
+        meta_records.append(dict(row))
+        meta_asins.add(row["parent_asin"])
 
     # Ensure meta exists for items in reviews
     review_asins = {r["parent_asin"] for r in review_records}
