@@ -48,6 +48,7 @@ export PATH="/usr/lib/wsl/lib:${HOME}/.local/bin:${PATH:-}"
 # workloads (safetensors, tokenizer.json, dataset shards). doctor.sh asserts this.
 export HF_HOME="${HOME}/.cache/huggingface"
 export HF_HUB_ENABLE_HF_TRANSFER=1
+export HF_DATASETS_TRUST_REMOTE_CODE=1
 
 # HF_TOKEN: read from a local, chmod-600, never-committed file rather than baking
 # it into any script or the repo. Unauthenticated Hub access is rate-limited and

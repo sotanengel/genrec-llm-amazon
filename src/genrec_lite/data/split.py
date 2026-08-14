@@ -66,11 +66,29 @@ def apply_split(interactions: pl.DataFrame, strategy: SplitStrategy) -> pl.DataF
 
 
 def compute_item_metadata(interactions: pl.DataFrame) -> pl.DataFrame:
-    """Compute first_seen_ts and n_train_inter from train-split interactions."""
-    train = interactions.filter(pl.col("split") == SPLIT_TRAIN)
-    return train.group_by("item_id").agg(
+    """Compute per-item metadata.
+
+    `first_seen_ts` is the earliest timestamp across ALL splits (train / valid /
+    test), which matches the invariant enforced by the schema validator
+    (`items.first_seen_ts <= min interaction ts per item`). Computing it over
+    train alone would violate the invariant for items whose earliest
+    interaction happens to have been assigned to a user's leave-one-out
+    valid/test event.
+
+    `n_train_inter` counts only train-split interactions (items with zero train
+    interactions are still included with a 0 count so every item that appears
+    anywhere in `interactions` gets a row).
+    """
+    first_seen = interactions.group_by("item_id").agg(
         pl.col("ts").min().alias("first_seen_ts"),
-        pl.len().alias("n_train_inter"),
+    )
+    train_counts = (
+        interactions.filter(pl.col("split") == SPLIT_TRAIN)
+        .group_by("item_id")
+        .agg(pl.len().alias("n_train_inter"))
+    )
+    return first_seen.join(train_counts, on="item_id", how="left").with_columns(
+        pl.col("n_train_inter").fill_null(0).cast(pl.Int64)
     )
 
 

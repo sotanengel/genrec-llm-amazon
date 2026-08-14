@@ -24,13 +24,41 @@ EVENT_TYPE_REVIEW = 3
 MIN_CORE = 5
 
 
+# Anything strictly greater than this is not a UNIX-seconds timestamp on any
+# realistic clock (~year 2286). We use it as the ceiling for a divide-by-1000
+# loop that transparently handles milli-, micro-, and nano-second timestamps.
+_TIMESTAMP_SECONDS_CEILING = 10_000_000_000
+
+
 def normalize_timestamp(ts_raw: int | float) -> int:
-    """Convert timestamp to UNIX seconds (DESIGN.md §10.10)."""
+    """Convert an Amazon-Reviews timestamp to UNIX seconds.
+
+    Amazon Reviews 2023 records usually carry milliseconds, but a small
+    minority land below 1e12 (records from before ~2001) and used to slip past
+    the naive `if ts >= 1e12` guard, causing downstream year-33189 datetime
+    failures. Divide by 1000 until the value looks like a plausible
+    seconds-since-epoch.
+    """
     ts = int(ts_raw)
-    # Millisecond timestamps are >= 1e12
-    if ts >= 1_000_000_000_000:
-        return ts // 1000
+    while ts > _TIMESTAMP_SECONDS_CEILING:
+        ts //= 1000
     return ts
+
+
+def _safe_float(value: Any, default: float = float("nan")) -> float:
+    """Coerce a value to float, returning `default` on None/missing/malformed input.
+
+    Amazon Reviews 2023 records occasionally carry stringified null sentinels
+    like `"None"` in numeric fields (rating, price), which crash the naive
+    `float(...)` call with `ValueError: could not convert string to float:
+    'None'`. We treat those as missing.
+    """
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def truncate_description(text: str, max_len: int = DESCRIPTION_MAX_LEN) -> str:
@@ -84,7 +112,7 @@ def build_interactions_from_records(records: list[dict[str, Any]]) -> pl.DataFra
                 "item_id": rec["parent_asin"],
                 "ts": ts,
                 "basket_id": i,
-                "rating": float(rec.get("rating", float("nan"))),
+                "rating": _safe_float(rec.get("rating")),
                 "event_type": EVENT_TYPE_REVIEW,
             }
         )
@@ -113,8 +141,7 @@ def build_items_from_records(
         else:
             category_path = str(meta.get("main_category", ""))
 
-        price_val = meta.get("price")
-        price = float(price_val) if price_val is not None else float("nan")
+        price = _safe_float(meta.get("price"))
         description = truncate_description(str(meta.get("description", "")))
 
         meta_row = item_meta.filter(pl.col("item_id") == item_id)
@@ -188,6 +215,11 @@ def prepare_from_records(
 HfRecords = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 
+def hf_config_names(category: str) -> tuple[str, str]:
+    """Return HF builder config names for a main category."""
+    return f"raw_review_{category}", f"raw_meta_{category}"
+
+
 def load_amazon_category_from_hf(category: str) -> HfRecords:
     """Load Amazon Reviews 2023 category from HuggingFace datasets."""
     try:
@@ -198,34 +230,53 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
         ) from exc
 
     logger.info("Loading Amazon Reviews 2023 category=%s from HuggingFace", category)
+    review_config, meta_config = hf_config_names(category)
     try:
         reviews = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023",
-            name="raw_review",
+            name=review_config,
             split="full",
             streaming=True,
+            trust_remote_code=True,
         )
         meta = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023",
-            name="raw_meta",
+            name=meta_config,
             split="full",
             streaming=True,
+            trust_remote_code=True,
         )
     except Exception as exc:
         raise RuntimeError(f"Failed to load Amazon Reviews 2023 from HuggingFace: {exc}") from exc
+
+    # The meta config's `images` column has a shard-level schema
+    # (list<struct<hi_res,large,thumb,variant>>) that the dataset script's
+    # declared features cannot cast, causing a "Download error: Unsupported cast"
+    # during streaming iteration. We do not use images, so drop it up front.
+    # (Tests pass a plain iterator that lacks remove_columns -- hasattr guards it.)
+    if hasattr(meta, "remove_columns"):
+        try:
+            meta = meta.remove_columns(["images"])
+        except (ValueError, KeyError):
+            pass
 
     review_records: list[dict[str, Any]] = []
     meta_records: list[dict[str, Any]] = []
     meta_asins: set[str] = set()
 
+    # `raw_review_{category}` is already a category-specific shard, so accept
+    # every row without an in-Python `main_category` filter. Historical Amazon
+    # Reviews 2023 records use the human-readable "Video Games" (space) whereas
+    # the config name uses "Video_Games" (underscore), so the equality check
+    # dropped every record and raised "No reviews found".
     for row in reviews:
-        if row.get("main_category") == category or category in str(row.get("categories", "")):
-            review_records.append(dict(row))
+        review_records.append(dict(row))
 
+    # Same rationale as for reviews above -- `raw_meta_{category}` is already
+    # category-specific.
     for row in meta:
-        if row.get("main_category") == category:
-            meta_records.append(dict(row))
-            meta_asins.add(row["parent_asin"])
+        meta_records.append(dict(row))
+        meta_asins.add(row["parent_asin"])
 
     # Ensure meta exists for items in reviews
     review_asins = {r["parent_asin"] for r in review_records}
