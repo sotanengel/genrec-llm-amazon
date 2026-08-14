@@ -98,10 +98,12 @@ def test_load_amazon_category_from_hf_uses_trust_remote_code() -> None:
     for call in mock_load.call_args_list:
         assert call.kwargs["trust_remote_code"] is True
 
+
 def test_build_interactions_handles_stringified_none_rating() -> None:
     """Amazon Reviews 2023 records occasionally carry rating='None' (string).
     The loader must coerce them to NaN instead of raising ValueError."""
     import math
+
     records = [
         {"user_id": "u0", "parent_asin": "i0", "timestamp": 1_600_000_000_000, "rating": "None"},
         {"user_id": "u1", "parent_asin": "i0", "timestamp": 1_600_000_086_400, "rating": 5.0},
@@ -111,6 +113,7 @@ def test_build_interactions_handles_stringified_none_rating() -> None:
     ratings = df["rating"].to_list()
     assert math.isnan(ratings[0])
     assert ratings[1] == 5.0
+
 
 def test_prepare_from_records_handles_item_whose_earliest_event_is_valid_or_test(tmp_path) -> None:
     """Regression: an item whose globally-earliest interaction lands in a user's
@@ -126,21 +129,27 @@ def test_prepare_from_records_handles_item_whose_earliest_event_is_valid_or_test
     # but i0 is one of u0's later items -> leave_one_out likely moves it out
     # of train. To force this we make i0 u0's most recent item.
     for i, iid in enumerate(["ix0", "ix1", "ix2", "ix3", "i0"]):
-        records.append({
-            "user_id": "u0", "parent_asin": iid,
-            "timestamp": 1_000_000_000_000 + i * 86_400_000,
-            "rating": 5.0,
-        })
+        records.append(
+            {
+                "user_id": "u0",
+                "parent_asin": iid,
+                "timestamp": 1_000_000_000_000 + i * 86_400_000,
+                "rating": 5.0,
+            }
+        )
     # u1..u4 each buy i0 and 4 other items at later times so i0's globally-min ts
     # is u0's t=1_000_000_000_000 + 4*86400000, which sits in u0's test/valid split.
     base_late = 1_000_000_500_000_000  # far in the future so u0 is earliest
     for u in range(1, 5):
         for i, iid in enumerate(["ix0", "ix1", "ix2", "ix3", "i0"]):
-            records.append({
-                "user_id": f"u{u}", "parent_asin": iid,
-                "timestamp": base_late + u * 86_400_000 + i * 3600_000,
-                "rating": 4.0,
-            })
+            records.append(
+                {
+                    "user_id": f"u{u}",
+                    "parent_asin": iid,
+                    "timestamp": base_late + u * 86_400_000 + i * 3600_000,
+                    "rating": 4.0,
+                }
+            )
     meta = [{"parent_asin": iid, "title": iid} for iid in ["ix0", "ix1", "ix2", "ix3", "i0"]]
     out_dir = tmp_path / "amazon_first_seen"
     prepare_from_records(records, meta, out_dir, split_strategy="leave_one_out", min_core=1)
@@ -158,4 +167,3 @@ def test_normalize_timestamp_sub_1e12_milliseconds_regression() -> None:
 def test_normalize_timestamp_microseconds() -> None:
     """Loop handles the microsecond scale too."""
     assert normalize_timestamp(1_600_000_000_000_000) == 1_600_000_000
-

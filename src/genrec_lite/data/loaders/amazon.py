@@ -45,7 +45,7 @@ def normalize_timestamp(ts_raw: int | float) -> int:
     return ts
 
 
-def _safe_float(value: object, default: float = float("nan")) -> float:
+def _safe_float(value: Any, default: float = float("nan")) -> float:
     """Coerce a value to float, returning `default` on None/missing/malformed input.
 
     Amazon Reviews 2023 records occasionally carry stringified null sentinels
