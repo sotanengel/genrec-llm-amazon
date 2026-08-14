@@ -33,6 +33,22 @@ def normalize_timestamp(ts_raw: int | float) -> int:
     return ts
 
 
+def _safe_float(value: object, default: float = float("nan")) -> float:
+    """Coerce a value to float, returning `default` on None/missing/malformed input.
+
+    Amazon Reviews 2023 records occasionally carry stringified null sentinels
+    like `"None"` in numeric fields (rating, price), which crash the naive
+    `float(...)` call with `ValueError: could not convert string to float:
+    'None'`. We treat those as missing.
+    """
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def truncate_description(text: str, max_len: int = DESCRIPTION_MAX_LEN) -> str:
     if len(text) <= max_len:
         return text
@@ -84,7 +100,7 @@ def build_interactions_from_records(records: list[dict[str, Any]]) -> pl.DataFra
                 "item_id": rec["parent_asin"],
                 "ts": ts,
                 "basket_id": i,
-                "rating": float(rec.get("rating", float("nan"))),
+                "rating": _safe_float(rec.get("rating")),
                 "event_type": EVENT_TYPE_REVIEW,
             }
         )
@@ -113,8 +129,7 @@ def build_items_from_records(
         else:
             category_path = str(meta.get("main_category", ""))
 
-        price_val = meta.get("price")
-        price = float(price_val) if price_val is not None else float("nan")
+        price = _safe_float(meta.get("price"))
         description = truncate_description(str(meta.get("description", "")))
 
         meta_row = item_meta.filter(pl.col("item_id") == item_id)

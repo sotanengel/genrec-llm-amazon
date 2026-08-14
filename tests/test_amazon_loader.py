@@ -97,3 +97,18 @@ def test_load_amazon_category_from_hf_uses_trust_remote_code() -> None:
     assert mock_load.call_args_list[1].kwargs["name"] == "raw_meta_Video_Games"
     for call in mock_load.call_args_list:
         assert call.kwargs["trust_remote_code"] is True
+
+def test_build_interactions_handles_stringified_none_rating() -> None:
+    """Amazon Reviews 2023 records occasionally carry rating='None' (string).
+    The loader must coerce them to NaN instead of raising ValueError."""
+    import math
+    records = [
+        {"user_id": "u0", "parent_asin": "i0", "timestamp": 1_600_000_000_000, "rating": "None"},
+        {"user_id": "u1", "parent_asin": "i0", "timestamp": 1_600_000_086_400, "rating": 5.0},
+    ]
+    df = build_interactions_from_records(records)
+    assert df.height == 2
+    ratings = df["rating"].to_list()
+    assert math.isnan(ratings[0])
+    assert ratings[1] == 5.0
+
