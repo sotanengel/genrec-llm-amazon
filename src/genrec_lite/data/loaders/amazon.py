@@ -188,6 +188,11 @@ def prepare_from_records(
 HfRecords = tuple[list[dict[str, Any]], list[dict[str, Any]]]
 
 
+def hf_config_names(category: str) -> tuple[str, str]:
+    """Return HF builder config names for a main category."""
+    return f"raw_review_{category}", f"raw_meta_{category}"
+
+
 def load_amazon_category_from_hf(category: str) -> HfRecords:
     """Load Amazon Reviews 2023 category from HuggingFace datasets."""
     try:
@@ -198,17 +203,18 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
         ) from exc
 
     logger.info("Loading Amazon Reviews 2023 category=%s from HuggingFace", category)
+    review_config, meta_config = hf_config_names(category)
     try:
         reviews = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023",
-            name="raw_review",
+            name=review_config,
             split="full",
             streaming=True,
             trust_remote_code=True,
         )
         meta = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023",
-            name="raw_meta",
+            name=meta_config,
             split="full",
             streaming=True,
             trust_remote_code=True,

@@ -8,6 +8,7 @@ from genrec_lite.data.loaders.amazon import (
     DESCRIPTION_MAX_LEN,
     build_interactions_from_records,
     filter_5core,
+    hf_config_names,
     load_amazon_category_from_hf,
     normalize_timestamp,
     prepare_from_records,
@@ -62,6 +63,13 @@ def test_prepare_from_records_produces_valid_bundle(
     assert stats.n_interactions > 0
 
 
+def test_hf_config_names_for_video_games() -> None:
+    assert hf_config_names("Video_Games") == (
+        "raw_review_Video_Games",
+        "raw_meta_Video_Games",
+    )
+
+
 def test_load_amazon_category_from_hf_uses_trust_remote_code() -> None:
     review_row = {
         "main_category": "Video_Games",
@@ -85,5 +93,7 @@ def test_load_amazon_category_from_hf_uses_trust_remote_code() -> None:
     assert review_records == [review_row]
     assert meta_records == [meta_row]
     assert mock_load.call_count == 2
+    assert mock_load.call_args_list[0].kwargs["name"] == "raw_review_Video_Games"
+    assert mock_load.call_args_list[1].kwargs["name"] == "raw_meta_Video_Games"
     for call in mock_load.call_args_list:
         assert call.kwargs["trust_remote_code"] is True
