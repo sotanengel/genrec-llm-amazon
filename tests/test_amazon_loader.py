@@ -146,3 +146,16 @@ def test_prepare_from_records_handles_item_whose_earliest_event_is_valid_or_test
     prepare_from_records(records, meta, out_dir, split_strategy="leave_one_out", min_core=1)
     # If the function returned without raising, the schema validator was satisfied.
 
+
+def test_normalize_timestamp_sub_1e12_milliseconds_regression() -> None:
+    """Regression: Amazon records from before ~2001 carry ms timestamps below
+    1e12 (e.g. 9.79e11). The old `>= 1e12` check let them through as seconds,
+    producing year-33189 datetimes downstream."""
+    # 979993018000 ms is 2001-01-20 UTC in seconds.
+    assert normalize_timestamp(979_993_018_000) == 979_993_018
+
+
+def test_normalize_timestamp_microseconds() -> None:
+    """Loop handles the microsecond scale too."""
+    assert normalize_timestamp(1_600_000_000_000_000) == 1_600_000_000
+

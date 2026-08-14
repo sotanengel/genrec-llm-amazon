@@ -24,12 +24,24 @@ EVENT_TYPE_REVIEW = 3
 MIN_CORE = 5
 
 
+# Anything strictly greater than this is not a UNIX-seconds timestamp on any
+# realistic clock (~year 2286). We use it as the ceiling for a divide-by-1000
+# loop that transparently handles milli-, micro-, and nano-second timestamps.
+_TIMESTAMP_SECONDS_CEILING = 10_000_000_000
+
+
 def normalize_timestamp(ts_raw: int | float) -> int:
-    """Convert timestamp to UNIX seconds (DESIGN.md §10.10)."""
+    """Convert an Amazon-Reviews timestamp to UNIX seconds.
+
+    Amazon Reviews 2023 records usually carry milliseconds, but a small
+    minority land below 1e12 (records from before ~2001) and used to slip past
+    the naive `if ts >= 1e12` guard, causing downstream year-33189 datetime
+    failures. Divide by 1000 until the value looks like a plausible
+    seconds-since-epoch.
+    """
     ts = int(ts_raw)
-    # Millisecond timestamps are >= 1e12
-    if ts >= 1_000_000_000_000:
-        return ts // 1000
+    while ts > _TIMESTAMP_SECONDS_CEILING:
+        ts //= 1000
     return ts
 
 
