@@ -222,6 +222,17 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
     except Exception as exc:
         raise RuntimeError(f"Failed to load Amazon Reviews 2023 from HuggingFace: {exc}") from exc
 
+    # The meta config's `images` column has a shard-level schema
+    # (list<struct<hi_res,large,thumb,variant>>) that the dataset script's
+    # declared features cannot cast, causing a "Download error: Unsupported cast"
+    # during streaming iteration. We do not use images, so drop it up front.
+    # (Tests pass a plain iterator that lacks remove_columns -- hasattr guards it.)
+    if hasattr(meta, "remove_columns"):
+        try:
+            meta = meta.remove_columns(["images"])
+        except (ValueError, KeyError):
+            pass
+
     review_records: list[dict[str, Any]] = []
     meta_records: list[dict[str, Any]] = []
     meta_asins: set[str] = set()
