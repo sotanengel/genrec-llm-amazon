@@ -204,12 +204,14 @@ def load_amazon_category_from_hf(category: str) -> HfRecords:
             name="raw_review",
             split="full",
             streaming=True,
+            trust_remote_code=True,
         )
         meta = load_dataset(
             "McAuley-Lab/Amazon-Reviews-2023",
             name="raw_meta",
             split="full",
             streaming=True,
+            trust_remote_code=True,
         )
     except Exception as exc:
         raise RuntimeError(f"Failed to load Amazon Reviews 2023 from HuggingFace: {exc}") from exc

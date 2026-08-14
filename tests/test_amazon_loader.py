@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 from genrec_lite.data.loaders.amazon import (
     DESCRIPTION_MAX_LEN,
     build_interactions_from_records,
     filter_5core,
+    load_amazon_category_from_hf,
     normalize_timestamp,
     prepare_from_records,
     truncate_description,
@@ -57,3 +60,30 @@ def test_prepare_from_records_produces_valid_bundle(
     assert stats.n_users > 0
     assert stats.n_items > 0
     assert stats.n_interactions > 0
+
+
+def test_load_amazon_category_from_hf_uses_trust_remote_code() -> None:
+    review_row = {
+        "main_category": "Video_Games",
+        "parent_asin": "item_0",
+        "user_id": "user_0",
+        "timestamp": 1_600_000_000_000,
+        "rating": 5.0,
+        "categories": [],
+    }
+    meta_row = {
+        "main_category": "Video_Games",
+        "parent_asin": "item_0",
+        "title": "Game 0",
+    }
+    reviews = iter([review_row])
+    meta = iter([meta_row])
+
+    with patch("datasets.load_dataset", side_effect=[reviews, meta]) as mock_load:
+        review_records, meta_records = load_amazon_category_from_hf("Video_Games")
+
+    assert review_records == [review_row]
+    assert meta_records == [meta_row]
+    assert mock_load.call_count == 2
+    for call in mock_load.call_args_list:
+        assert call.kwargs["trust_remote_code"] is True
