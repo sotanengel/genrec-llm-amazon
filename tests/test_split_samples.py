@@ -91,7 +91,7 @@ def test_samples_parquet_unchanged_when_train_added(
         filter_5core,
         remap_ids,
     )
-    from genrec_lite.data.split import apply_split, build_samples, compute_item_metadata
+    from genrec_lite.data.split import apply_split, compute_item_metadata
 
     interactions = build_interactions_from_records(mini_review_records)
     interactions = filter_5core(interactions, min_core=3)
