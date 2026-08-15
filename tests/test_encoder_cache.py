@@ -236,8 +236,12 @@ def test_cache_scope_train_uses_suffix_paths(tmp_path: Path) -> None:
 
 def test_cache_load_infers_n_samples_from_file_size(tmp_path: Path) -> None:
     n_samples, hidden_dim = 4, 3
-    cache = HiddenStateCache(tmp_path, "k", n_samples=n_samples, hidden_dim=hidden_dim, scope="eval")
-    hidden = torch.arange(n_samples * hidden_dim, dtype=torch.float32).reshape(n_samples, hidden_dim)
+    cache = HiddenStateCache(
+        tmp_path, "k", n_samples=n_samples, hidden_dim=hidden_dim, scope="eval"
+    )
+    hidden = torch.arange(n_samples * hidden_dim, dtype=torch.float32).reshape(
+        n_samples, hidden_dim
+    )
     cache.save(list(range(n_samples)), hidden)
 
     opened = HiddenStateCache.open_existing(tmp_path, "k", hidden_dim, scope="eval")
