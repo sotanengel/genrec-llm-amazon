@@ -46,6 +46,37 @@ class ExpConfig(BaseModel):
     sasrec: SasrecConfig = Field(default_factory=SasrecConfig)
 
 
+class HeadConfig(BaseModel):
+    d_emb: int = 256
+    scorer: Literal["dot", "mlp"] = "dot"
+    dropout: float = 0.1
+
+
+class TrainHeadConfig(BaseModel):
+    lr: float = 1e-3
+    item_emb_lr: float = 1e-3
+    batch_size: int = 512
+    n_negatives: int = 4096
+    epochs: int = 50
+    early_stop_patience: int = 5
+    monitor: str = "valid/ndcg@20"
+
+
+class M3ExpConfig(BaseModel):
+    dataset: str
+    model: str
+    verbalizer: str
+    head: HeadConfig = Field(default_factory=HeadConfig)
+    train_head: TrainHeadConfig = Field(default_factory=TrainHeadConfig)
+    item_init: Literal["random", "text", "text_frozen"] = "text"
+    embed_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    cache_dir: str = "cache/hidden_states"
+    ks: list[int] = Field(default_factory=lambda: [10, 20])
+    seeds: list[int] = Field(default_factory=lambda: [0])
+    eval_split: int = Field(default=1, ge=0, le=2)
+    cold_threshold: int = Field(default=5, ge=1)
+
+
 class LLMConfig(BaseModel):
     model_id: str
     revision: str
@@ -135,6 +166,18 @@ def load_exp_config(
         raise FileNotFoundError(f"Experiment config not found: {exp_path}")
     data = _load_yaml(exp_path)
     return ExpConfig.model_validate(data)
+
+
+def load_m3_exp_config(
+    exp: str,
+    config_dir: Path | None = None,
+) -> M3ExpConfig:
+    root = config_dir or Path("configs")
+    exp_path = root / "exp" / f"{exp}.yaml"
+    if not exp_path.exists():
+        raise FileNotFoundError(f"M3 experiment config not found: {exp_path}")
+    data = _load_yaml(exp_path)
+    return M3ExpConfig.model_validate(data)
 
 
 def validate_llm_config_file(path: Path) -> LLMConfig:
