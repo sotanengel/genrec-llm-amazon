@@ -160,7 +160,7 @@ class HeadTrainer:
         candidate_rows: list[list[int]] = []
         target_positions: list[int] = []
 
-        for batch_index, target in enumerate(batch_targets):
+        for _batch_index, target in enumerate(batch_targets):
             row_candidates = [target]
             in_batch_negs = {
                 item for item in batch_targets if item != target and item not in row_candidates
