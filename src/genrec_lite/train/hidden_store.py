@@ -17,16 +17,12 @@ class HiddenStateStore:
 
     def __init__(self, cache: HiddenStateCache) -> None:
         if not cache.exists():
-            msg = (
-                f"Hidden state cache is not finalized: {cache.memmap_path}. "
-                "Run encode first."
-            )
+            msg = f"Hidden state cache is not finalized: {cache.memmap_path}. Run encode first."
             raise FileNotFoundError(msg)
         self._cache = cache
         index_df = pl.read_parquet(cache.index_path)
         self._sample_id_to_row = {
-            int(row["sample_id"]): int(row["row_idx"])
-            for row in index_df.iter_rows(named=True)
+            int(row["sample_id"]): int(row["row_idx"]) for row in index_df.iter_rows(named=True)
         }
         self._memmap = np.memmap(
             cache.memmap_path,

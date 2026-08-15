@@ -46,7 +46,9 @@ def head_trainer_bundle(mini_dataset: Path) -> dict[str, object]:
     _write_fake_cache(cache_dir, key, train_ids, hidden_dim, scope="train")
     eval_store = HiddenStateStore.from_cache_dir(cache_dir, key, hidden_dim, scope="eval")
     train_store = HiddenStateStore.from_cache_dir(cache_dir, key, hidden_dim, scope="train")
-    item_init, freeze = build_item_init_matrix(items, "text", "sentence-transformers/all-MiniLM-L6-v2")
+    item_init, freeze = build_item_init_matrix(
+        items, "text", "sentence-transformers/all-MiniLM-L6-v2"
+    )
     model = GenRecLite(
         d_llm=hidden_dim,
         d_emb=8,
