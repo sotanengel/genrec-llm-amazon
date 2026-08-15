@@ -1,0 +1,22 @@
+dataset: amazon_video_games
+model: qwen3-0.6b-base
+verbalizer: v1_full
+head:
+  d_emb: 64
+  scorer: dot
+  dropout: 0.1
+train_head:
+  lr: 0.001
+  item_emb_lr: 0.001
+  batch_size: 32
+  n_negatives: 16
+  epochs: 2
+  early_stop_patience: 1
+  monitor: valid/ndcg@20
+item_init: text
+embed_model: sentence-transformers/all-MiniLM-L6-v2
+ks: [10, 20]
+seeds: [0]
+eval_split: 2
+cold_threshold: 5
+cache_dir: cache/hidden_states

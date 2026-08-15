@@ -23,6 +23,7 @@ from genrec_lite.config import (
     load_data_config,
     load_exp_config,
     load_llm_config,
+    load_m3_exp_config,
     load_verbalizer_config,
 )
 from genrec_lite.data.loaders.amazon import prepare_amazon_dataset
@@ -33,6 +34,7 @@ from genrec_lite.encode.cache import CacheKeyConfig, CacheScope, HiddenStateCach
 from genrec_lite.encode.prefill import ENCODER_VERSION, PrefillEncoder
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
+from genrec_lite.models.genrec_lite import GenRecLite
 from genrec_lite.report.build import (
     aggregate_metrics_across_seeds,
     build_results_markdown,
@@ -41,6 +43,9 @@ from genrec_lite.report.build import (
     save_metrics_summary,
     save_run_metadata,
 )
+from genrec_lite.train.head_trainer import HeadTrainer, build_log_q
+from genrec_lite.train.hidden_store import HiddenStateStore
+from genrec_lite.train.item_init import apply_item_init_freeze, build_item_init_matrix
 from genrec_lite.verbalize.base import Sample, TokenBudget
 from genrec_lite.verbalize.budget import get_tokenizer
 from genrec_lite.verbalize.templates import TemplateVerbalizer, build_verbalizer_from_config
@@ -51,11 +56,13 @@ eval_app = typer.Typer(help="Evaluation commands")
 report_app = typer.Typer(help="Report generation")
 verbalize_app = typer.Typer(help="Verbalizer commands")
 encode_app = typer.Typer(help="Encoding commands")
+train_app = typer.Typer(help="Training commands")
 app.add_typer(data_app, name="data")
 app.add_typer(eval_app, name="eval")
 app.add_typer(report_app, name="report")
 app.add_typer(verbalize_app, name="verbalize")
 app.add_typer(encode_app, name="encode")
+app.add_typer(train_app, name="train")
 
 console = Console()
 
@@ -274,6 +281,29 @@ def _build_encode_cache_meta(
     return meta
 
 
+def _build_cache_key(
+    llm_config: LLMConfig,
+    verbalizer: str,
+    verb_config: VerbalizerYamlConfig,
+) -> str:
+    deterministic = _encode_deterministic(llm_config)
+    return compute_cache_key(
+        CacheKeyConfig(
+            model_id=llm_config.model_id,
+            revision=llm_config.revision,
+            verbalizer_name=verbalizer,
+            verbalizer_config=verb_config.model_dump(),
+            max_len=llm_config.max_len,
+            dtype=llm_config.dtype,
+            quantize=llm_config.quantize,
+            pooling=llm_config.pooling,
+            attn_implementation=llm_config.attn_implementation,
+            deterministic=deterministic,
+            encoder_version=ENCODER_VERSION,
+        )
+    )
+
+
 def _sample_from_row(row: dict[str, Any]) -> Sample:
     return Sample(
         user_id=int(row["user_id"]),
@@ -431,22 +461,7 @@ def encode_run(
 
     encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])
-    deterministic = _encode_deterministic(llm_config)
-    cache_key = compute_cache_key(
-        CacheKeyConfig(
-            model_id=llm_config.model_id,
-            revision=llm_config.revision,
-            verbalizer_name=verbalizer,
-            verbalizer_config=verb_config.model_dump(),
-            max_len=llm_config.max_len,
-            dtype=llm_config.dtype,
-            quantize=llm_config.quantize,
-            pooling=llm_config.pooling,
-            attn_implementation=llm_config.attn_implementation,
-            deterministic=deterministic,
-            encoder_version=ENCODER_VERSION,
-        )
-    )
+    cache_key = _build_cache_key(llm_config, verbalizer, verb_config)
     cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim, scope=cache_scope)
     if cache.exists():
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
@@ -459,6 +474,7 @@ def encode_run(
         )
 
     lengths = encoder.token_lengths(texts)
+    deterministic = _encode_deterministic(llm_config)
     if deterministic:
         batch_size = llm_config.batch_size or 8
         batch_groups = [
@@ -489,6 +505,110 @@ def encode_run(
         f"({cache.expected_bytes} bytes) -> {cache.memmap_path}"
     )
     console.print(msg)
+
+
+@train_app.command("head")
+def train_head(
+    exp: str = typer.Option(..., "--exp", help="M3 experiment config name"),
+    seed: int | None = typer.Option(None, "--seed", help="Random seed override"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Train GenRecLite ranking head on cached hidden states."""
+    _setup_logging(verbose)
+    root = find_project_root()
+    exp_config = load_m3_exp_config(exp, config_dir=root / "configs")
+    data_config = load_data_config(exp_config.dataset, config_dir=root / "configs")
+    llm_config = load_llm_config(exp_config.model, config_dir=root / "configs")
+    verb_config = load_verbalizer_config(exp_config.verbalizer, config_dir=root / "configs")
+
+    run_seed = seed if seed is not None else exp_config.seeds[0]
+    seeds_to_run = [run_seed] if seed is not None else list(exp_config.seeds)
+    data_dir = root / data_config.output_dir
+    if not data_dir.exists():
+        console.print(f"[red]Data directory not found:[/red] {data_dir}")
+        raise typer.Exit(code=1)
+
+    interactions, items, _, samples = read_parquet_bundle(data_dir)
+    try:
+        train_samples = read_train_samples(data_dir)
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]Train samples not found:[/red] {exc}\n"
+            "Run `python -m genrec_lite data prepare --dataset "
+            f"{exp_config.dataset}` first."
+        )
+        raise typer.Exit(code=1) from exc
+
+    cache_key = _build_cache_key(llm_config, exp_config.verbalizer, verb_config)
+    cache_dir = root / exp_config.cache_dir
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    try:
+        eval_store = HiddenStateStore.from_cache_dir(cache_dir, cache_key, scope="eval")
+        train_store = HiddenStateStore.from_cache_dir(cache_dir, cache_key, scope="train")
+    except FileNotFoundError as exc:
+        console.print(
+            f"[red]Hidden state cache missing:[/red] {exc}\n"
+            "Run `encode run --scope eval` and `encode run --scope train` first."
+        )
+        raise typer.Exit(code=1) from exc
+
+    hidden_dim = eval_store.hidden_dim
+    item_init, freeze = build_item_init_matrix(items, exp_config.item_init, exp_config.embed_model)
+    log_q = build_log_q(interactions, items.height)
+
+    all_results: list[pd.DataFrame] = []
+    for current_seed in seeds_to_run:
+        _set_seed(current_seed)
+        seed_model = GenRecLite(
+            d_llm=hidden_dim,
+            d_emb=exp_config.head.d_emb,
+            n_items=items.height,
+            scorer=exp_config.head.scorer,
+            dropout=exp_config.head.dropout,
+            item_init=item_init,
+        )
+        apply_item_init_freeze(seed_model, freeze)
+        trainer = HeadTrainer(
+            model=seed_model,
+            train_store=train_store,
+            eval_store=eval_store,
+            train_samples=train_samples,
+            valid_samples=samples,
+            items=items,
+            interactions=interactions,
+            config=exp_config.train_head,
+            device=device,
+            log_q=log_q,
+            ks=tuple(exp_config.ks),
+            cold_threshold=exp_config.cold_threshold,
+            method_name="genrec_lite",
+        )
+        console.print(f"[bold]Training head[/bold] (seed={current_seed})")
+        trainer.fit()
+        eval_samples = samples.filter(pl.col("split") == exp_config.eval_split)
+        result = evaluate(
+            score_fn=trainer.score_batch,
+            samples=eval_samples,
+            items=items,
+            interactions=interactions,
+            ks=tuple(exp_config.ks),
+            cold_threshold=exp_config.cold_threshold,
+            method="genrec_lite",
+        )
+        result["seed"] = current_seed
+        all_results.append(result)
+
+    metrics = pd.concat(all_results, ignore_index=True)
+    summary = aggregate_metrics_across_seeds(metrics)
+    reports_root = root / "reports"
+    run_dir = create_run_dir(reports_root)
+    config_dict: dict[str, Any] = exp_config.model_dump()
+    config_dict["seeds"] = seeds_to_run
+    save_run_metadata(run_dir, config_dict, metrics)
+    save_metrics_summary(run_dir, summary)
+    build_results_markdown(metrics, reports_root / "results.md")
+    console.print(f"[green]Done.[/green] Run saved to {run_dir}")
 
 
 if __name__ == "__main__":
