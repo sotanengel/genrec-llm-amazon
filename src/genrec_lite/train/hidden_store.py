@@ -61,7 +61,9 @@ class HiddenStateStore:
             msg = f"Cache not found for scope={scope!r} under {cache_dir}"
             raise FileNotFoundError(msg)
         n_samples = pl.read_parquet(index_path).height
-        resolved_dim = hidden_dim if hidden_dim is not None else infer_hidden_dim(memmap_path, n_samples)
+        resolved_dim = (
+            hidden_dim if hidden_dim is not None else infer_hidden_dim(memmap_path, n_samples)
+        )
         cache = HiddenStateCache.open_existing(cache_dir, key, resolved_dim, scope=cache_scope)
         return cls(cache)
 

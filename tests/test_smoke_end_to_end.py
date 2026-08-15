@@ -7,7 +7,14 @@ from pathlib import Path
 import pytest
 import torch
 
-from genrec_lite.config import DataConfig, HeadConfig, LLMConfig, M3ExpConfig, TrainHeadConfig, VerbalizerYamlConfig
+from genrec_lite.config import (
+    DataConfig,
+    HeadConfig,
+    LLMConfig,
+    M3ExpConfig,
+    TrainHeadConfig,
+    VerbalizerYamlConfig,
+)
 from genrec_lite.verbalize.base import TokenBudget
 
 
@@ -79,15 +86,17 @@ def test_smoke_encode_train_eval_pipeline(
     monkeypatch.setattr(
         cli_module,
         "_resolve_verbalizer_and_budget",
-        lambda verb_config, llm_config: (object(), TokenBudget(max_tokens=512, tokenizer_name="gpt2")),
+        lambda verb_config, llm_config: (
+            object(),
+            TokenBudget(max_tokens=512, tokenizer_name="gpt2"),
+        ),
     )
     monkeypatch.setattr(
         cli_module,
         "_render_texts",
-        lambda encode_samples, items, users, interactions, renderer, budget: [
-            "prompt"
-        ]
-        * encode_samples.height,
+        lambda encode_samples, items, users, interactions, renderer, budget: (
+            ["prompt"] * encode_samples.height
+        ),
     )
     monkeypatch.setattr(cli_module, "find_project_root", lambda start=None: tmp_path)
 
