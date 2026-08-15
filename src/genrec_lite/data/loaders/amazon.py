@@ -13,6 +13,7 @@ from genrec_lite.data.split import (
     SplitStrategy,
     apply_split,
     build_samples,
+    build_train_samples,
     compute_item_metadata,
     compute_user_metadata,
 )
@@ -206,8 +207,11 @@ def prepare_from_records(
     items = build_items_from_records(meta_records, item_raw_map, item_meta)
     users = build_users_table(interactions, user_raw_map, user_meta)
     samples = build_samples(interactions, items, split_strategy, cold_threshold=cold_threshold)
+    train_samples = build_train_samples(interactions, items, cold_threshold=cold_threshold)
 
-    write_parquet_bundle(output_dir, interactions, items, users, samples)
+    write_parquet_bundle(
+        output_dir, interactions, items, users, samples, train_samples=train_samples
+    )
     logger.info("Wrote parquet bundle to %s", output_dir)
     return output_dir
 

@@ -163,6 +163,7 @@ def write_parquet_bundle(
     items: pl.DataFrame,
     users: pl.DataFrame,
     samples: pl.DataFrame,
+    train_samples: pl.DataFrame | None = None,
 ) -> None:
     interactions = cast_interactions(interactions)
     items = cast_items(items)
@@ -174,6 +175,10 @@ def write_parquet_bundle(
     items.write_parquet(out_dir / "items.parquet")
     users.write_parquet(out_dir / "users.parquet")
     samples.write_parquet(out_dir / "samples.parquet")
+    if train_samples is not None:
+        train_samples = cast_samples(train_samples)
+        validate_samples(train_samples)
+        train_samples.write_parquet(out_dir / "train_samples.parquet")
 
 
 ParquetBundle = tuple[pl.DataFrame, pl.DataFrame, pl.DataFrame, pl.DataFrame]
@@ -186,3 +191,13 @@ def read_parquet_bundle(data_dir: Path) -> ParquetBundle:
     samples = pl.read_parquet(data_dir / "samples.parquet")
     validate_bundle(interactions, items, users, samples)
     return interactions, items, users, samples
+
+
+def read_train_samples(data_dir: Path) -> pl.DataFrame:
+    """Load train_samples.parquet; raises if missing."""
+    path = data_dir / "train_samples.parquet"
+    if not path.exists():
+        raise FileNotFoundError(f"train_samples.parquet not found: {path}")
+    samples = pl.read_parquet(path)
+    validate_samples(samples)
+    return samples

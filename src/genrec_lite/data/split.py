@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import polars as pl
 
@@ -168,3 +168,77 @@ def build_samples(
             "target_is_cold": pl.Boolean,
         },
     )
+
+
+_SAMPLES_SCHEMA: dict[str, Any] = {
+    "sample_id": pl.Int64,
+    "user_id": pl.Int32,
+    "cutoff_ts": pl.Int64,
+    "target_item": pl.Int32,
+    "history": pl.List(pl.Int32),
+    "split": pl.Int8,
+    "is_repeat": pl.Boolean,
+    "target_is_cold": pl.Boolean,
+}
+
+
+def build_train_samples(
+    interactions: pl.DataFrame,
+    items: pl.DataFrame,
+    cold_threshold: int = 5,
+) -> pl.DataFrame:
+    """Build training samples from train-split interactions only.
+
+    Each train interaction becomes one sample. History contains only prior
+    train interactions for the same user (ts strictly before cutoff). The user's
+    first train event is excluded because it has empty history.
+
+    ``sample_id`` is assigned independently in ``user_id``, ``ts`` sort order
+    starting at 0. Eval samples in ``samples.parquet`` keep their own ID space.
+    """
+    train = interactions.filter(pl.col("split") == SPLIT_TRAIN).sort(["user_id", "ts"])
+    if train.height == 0:
+        return pl.DataFrame(schema=_SAMPLES_SCHEMA)
+
+    item_cold = items.select("item_id", "n_train_inter")
+    hist_src = train.select(
+        pl.col("user_id"),
+        pl.col("ts").alias("hist_ts"),
+        pl.col("item_id").alias("hist_item"),
+    )
+    targets = train.select(
+        pl.col("user_id"),
+        pl.col("ts").alias("cutoff_ts"),
+        pl.col("item_id").alias("target_item"),
+    )
+
+    with_history = (
+        targets.join(hist_src, on="user_id", how="inner")
+        .filter(pl.col("hist_ts") < pl.col("cutoff_ts"))
+        .group_by(["user_id", "cutoff_ts", "target_item"])
+        .agg(pl.col("hist_item").sort_by("hist_ts").alias("history"))
+    )
+
+    samples = (
+        with_history.sort(["user_id", "cutoff_ts"])
+        .with_row_index("sample_id")
+        .with_columns(
+            pl.lit(SPLIT_TRAIN).cast(pl.Int8).alias("split"),
+            pl.col("history").list.contains(pl.col("target_item")).alias("is_repeat"),
+        )
+        .join(item_cold, left_on="target_item", right_on="item_id", how="left")
+        .with_columns(
+            pl.col("n_train_inter").fill_null(0).lt(cold_threshold).alias("target_is_cold"),
+        )
+        .select(
+            pl.col("sample_id").cast(pl.Int64),
+            "user_id",
+            "cutoff_ts",
+            "target_item",
+            "history",
+            "split",
+            "is_repeat",
+            "target_is_cold",
+        )
+    )
+    return samples
