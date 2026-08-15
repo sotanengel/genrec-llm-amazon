@@ -391,10 +391,10 @@ def encode_run(
     model: str = typer.Option("qwen3-1.7b-base", "--model", help="LLM config name"),
     verbalizer: str = typer.Option("v1_full", "--verbalizer", help="Verbalizer config name"),
     cache_dir: str = typer.Option("cache/hidden_states", "--cache-dir"),
-    scope: CacheScope = typer.Option(
+    scope: str = typer.Option(
         "eval",
         "--scope",
-        help="eval encodes samples.parquet (valid+test); train encodes train_samples.parquet",
+        help="eval encodes samples.parquet; train encodes train_samples.parquet",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -408,6 +408,11 @@ def encode_run(
     if not data_dir.exists():
         console.print(f"[red]Data directory not found:[/red] {data_dir}")
         raise typer.Exit(code=1)
+
+    if scope not in ("eval", "train"):
+        console.print(f"[red]Invalid scope:[/red] {scope!r} (expected 'eval' or 'train')")
+        raise typer.Exit(code=1)
+    cache_scope: CacheScope = scope  # type: ignore[assignment]
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
     if scope == "train":
@@ -440,7 +445,7 @@ def encode_run(
             encoder_version=ENCODER_VERSION,
         )
     )
-    cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim, scope=scope)
+    cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim, scope=cache_scope)
     if cache.exists():
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
         raise typer.Exit(code=0)
