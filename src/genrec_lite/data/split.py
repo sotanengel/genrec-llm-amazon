@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 import polars as pl
 
@@ -170,7 +170,7 @@ def build_samples(
     )
 
 
-_SAMPLES_SCHEMA: dict[str, pl.DataType] = {
+_SAMPLES_SCHEMA: dict[str, Any] = {
     "sample_id": pl.Int64,
     "user_id": pl.Int32,
     "cutoff_ts": pl.Int64,
