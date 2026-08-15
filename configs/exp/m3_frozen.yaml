@@ -1,5 +1,5 @@
 dataset: amazon_video_games
-model: qwen3-0.6b-base
+model: qwen3-8b-base
 verbalizer: v1_full
 head:
   d_emb: 64

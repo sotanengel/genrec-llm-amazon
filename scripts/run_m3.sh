@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 DATASET="${GENREC_DATASET:-amazon_video_games}"
-MODEL="${GENREC_MODEL:-qwen3-0.6b-base}"
+MODEL="${GENREC_MODEL:-qwen3-8b-base}"
 VERBALIZER="${GENREC_VERBALIZER:-v1_full}"
 EXP="${GENREC_EXP:-m3_frozen}"
 
