@@ -89,5 +89,11 @@ verbalize-samples:
 encode:
 	uv run --frozen python -m genrec_lite encode run --dataset amazon_video_games --model qwen3-1.7b-base --verbalizer v1_full
 
+train-head:
+	uv run --frozen python -m genrec_lite train head --exp m3_frozen
+
+run-m3:
+	bash scripts/run_m3.sh
+
 validate-sasrec:
 	uv run --frozen python scripts/validate_sasrec_literature.py --dataset amazon_video_games_literature

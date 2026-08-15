@@ -9,7 +9,21 @@ import polars as pl
 import torch
 from torch import Tensor
 
-from genrec_lite.encode.cache import HiddenStateCache
+from genrec_lite.encode.cache import CacheScope, HiddenStateCache
+
+
+def infer_hidden_dim(memmap_path: Path, n_samples: int) -> int:
+    """Derive hidden dimension from memmap file size and sample count."""
+    if n_samples <= 0:
+        raise ValueError("n_samples must be positive")
+    nbytes = memmap_path.stat().st_size
+    if nbytes % (n_samples * 2) != 0:
+        msg = (
+            f"Memmap size {nbytes} is not divisible by n_samples*2 "
+            f"({n_samples * 2}) for {memmap_path}"
+        )
+        raise ValueError(msg)
+    return nbytes // (n_samples * 2)
 
 
 class HiddenStateStore:
@@ -36,13 +50,21 @@ class HiddenStateStore:
         cls,
         cache_dir: Path,
         key: str,
-        hidden_dim: int,
+        hidden_dim: int | None = None,
         scope: str = "eval",
     ) -> HiddenStateStore:
-        from genrec_lite.encode.cache import CacheScope
-
         cache_scope: CacheScope = scope  # type: ignore[assignment]
-        cache = HiddenStateCache.open_existing(cache_dir, key, hidden_dim, scope=cache_scope)
+        suffix = "" if scope == "eval" else ".train"
+        memmap_path = cache_dir / f"{key}{suffix}.f16.memmap"
+        index_path = cache_dir / f"{key}{suffix}.index.parquet"
+        if not memmap_path.exists() or not index_path.exists():
+            msg = f"Cache not found for scope={scope!r} under {cache_dir}"
+            raise FileNotFoundError(msg)
+        n_samples = pl.read_parquet(index_path).height
+        resolved_dim = (
+            hidden_dim if hidden_dim is not None else infer_hidden_dim(memmap_path, n_samples)
+        )
+        cache = HiddenStateCache.open_existing(cache_dir, key, resolved_dim, scope=cache_scope)
         return cls(cache)
 
     @property
