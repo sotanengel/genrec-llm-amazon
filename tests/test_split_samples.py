@@ -49,9 +49,7 @@ def test_train_sample_history_only_from_train_before_cutoff(mini_bundle: tuple) 
         cutoff = row["cutoff_ts"]
         history = row["history"]
         allowed = (
-            train_inter.filter(
-                (pl.col("user_id") == user_id) & (pl.col("ts") < cutoff)
-            )
+            train_inter.filter((pl.col("user_id") == user_id) & (pl.col("ts") < cutoff))
             .sort("ts")["item_id"]
             .to_list()
         )
@@ -90,18 +88,16 @@ def test_samples_parquet_unchanged_when_train_added(
     from genrec_lite.data.loaders.amazon import (
         build_interactions_from_records,
         build_items_from_records,
-        build_users_table,
         filter_5core,
         remap_ids,
     )
-    from genrec_lite.data.split import apply_split, build_samples, compute_item_metadata, compute_user_metadata
+    from genrec_lite.data.split import apply_split, build_samples, compute_item_metadata
 
     interactions = build_interactions_from_records(mini_review_records)
     interactions = filter_5core(interactions, min_core=3)
     interactions, user_raw_map, item_raw_map = remap_ids(interactions)
     interactions = apply_split(interactions, "global_temporal")
     item_meta = compute_item_metadata(interactions)
-    user_meta = compute_user_metadata(interactions)
     items = build_items_from_records(mini_meta_records, item_raw_map, item_meta)
     expected_samples = build_samples(interactions, items, "global_temporal", cold_threshold=5)
 
