@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, cast
 
 import torch
 import torch.nn as nn
@@ -37,7 +37,7 @@ class RankingHead(nn.Module):
             self._initialize_item_embeddings(item_init)
 
         if scorer == "mlp":
-            self.scorer_mlp = nn.Sequential(
+            self.scorer_mlp: nn.Module = nn.Sequential(
                 nn.Linear(d_emb, d_emb),
                 nn.ReLU(),
                 nn.Linear(d_emb, d_emb),
@@ -62,7 +62,7 @@ class RankingHead(nn.Module):
 
     def _user_repr(self, h: torch.Tensor) -> torch.Tensor:
         z = self.dropout(self.proj(h))
-        return self.scorer_mlp(z)
+        return cast(torch.Tensor, self.scorer_mlp(z))
 
     def score(
         self,
@@ -76,5 +76,5 @@ class RankingHead(nn.Module):
 
         item_vecs = self.item_emb(candidate_ids)
         if item_vecs.dim() == 2:
-            return z @ item_vecs.T
-        return (z.unsqueeze(1) * item_vecs).sum(dim=-1)
+            return cast(torch.Tensor, z @ item_vecs.T)
+        return cast(torch.Tensor, (z.unsqueeze(1) * item_vecs).sum(dim=-1))
