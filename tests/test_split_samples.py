@@ -78,7 +78,7 @@ def test_train_sample_id_unique_and_stable(mini_bundle: tuple) -> None:
     first = build_train_samples(interactions, items)
     second = build_train_samples(interactions, items)
     assert first["sample_id"].n_unique() == first.height
-    assert first.frame_equal(second)
+    assert first.equals(second)
 
 
 def test_samples_parquet_unchanged_when_train_added(
@@ -115,7 +115,7 @@ def test_samples_parquet_unchanged_when_train_added(
         min_core=3,
     )
     _, _, _, actual_samples = read_parquet_bundle(out_dir)
-    assert actual_samples.frame_equal(expected_samples)
+    assert actual_samples.equals(expected_samples)
     assert actual_samples.filter(pl.col("split") == SPLIT_TRAIN).height == 0
 
 
