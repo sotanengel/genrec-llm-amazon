@@ -7,7 +7,7 @@ import os
 import random
 import subprocess
 from datetime import UTC, datetime
-from typing import Any
+from typing import Annotated, Any
 
 import numpy as np
 import pandas as pd
@@ -391,11 +391,13 @@ def encode_run(
     model: str = typer.Option("qwen3-1.7b-base", "--model", help="LLM config name"),
     verbalizer: str = typer.Option("v1_full", "--verbalizer", help="Verbalizer config name"),
     cache_dir: str = typer.Option("cache/hidden_states", "--cache-dir"),
-    scope: str = typer.Option(
-        "eval",
-        "--scope",
-        help="eval encodes samples.parquet; train encodes train_samples.parquet",
-    ),
+    scope: Annotated[
+        str,
+        typer.Option(
+            "--scope",
+            help="eval encodes samples.parquet; train encodes train_samples.parquet",
+        ),
+    ] = "eval",
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Encode samples with frozen LLM prefill and cache hidden states."""
