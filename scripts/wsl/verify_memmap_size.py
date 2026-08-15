@@ -12,8 +12,8 @@ from genrec_lite.config import (
     load_llm_config,
     load_verbalizer_config,
 )
-from genrec_lite.data.schema import read_parquet_bundle
-from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
+from genrec_lite.data.schema import read_parquet_bundle, read_train_samples
+from genrec_lite.encode.cache import CacheKeyConfig, CacheScope, HiddenStateCache, compute_cache_key
 from genrec_lite.encode.prefill import ENCODER_VERSION, PrefillEncoder
 
 
@@ -55,13 +55,18 @@ def verify_memmap_size(
     verbalizer: str,
     cache_dir: str = "cache/hidden_states",
     hidden_dim: int | None = None,
+    scope: CacheScope = "eval",
     root: Path | None = None,
 ) -> None:
     project_root = root or find_project_root()
     data_config = load_data_config(dataset, config_dir=project_root / "configs")
     llm_config = load_llm_config(model, config_dir=project_root / "configs")
-    _, _, _, samples = read_parquet_bundle(project_root / data_config.output_dir)
-    n_samples = samples.height
+    data_path = project_root / data_config.output_dir
+    if scope == "train":
+        n_samples = read_train_samples(data_path).height
+    else:
+        _, _, _, samples = read_parquet_bundle(data_path)
+        n_samples = samples.height
 
     if hidden_dim is None:
         encoder = PrefillEncoder.from_config(llm_config)
@@ -77,11 +82,12 @@ def verify_memmap_size(
         cache_key,
         n_samples,
         hidden_dim,
+        scope=scope,
     )
     actual = cache.memmap_path.stat().st_size
     expected = cache.expected_bytes
     print(
-        f"dataset={dataset} model={model} verbalizer={verbalizer} "
+        f"dataset={dataset} model={model} verbalizer={verbalizer} scope={scope} "
         f"n={n_samples} hidden_dim={hidden_dim} "
         f"expected_bytes={expected} actual_bytes={actual} ok={actual == expected}"
     )
@@ -117,6 +123,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Skip model load by supplying hidden dimension explicitly",
     )
+    parser.add_argument(
+        "--scope",
+        choices=("eval", "train"),
+        default="eval",
+        help="eval verifies samples.parquet memmap; train verifies train_samples.parquet",
+    )
     return parser.parse_args(argv)
 
 
@@ -128,6 +140,7 @@ def main(argv: list[str] | None = None) -> None:
         verbalizer=args.verbalizer,
         cache_dir=args.cache_dir,
         hidden_dim=args.hidden_dim,
+        scope=args.scope,
     )
 
 

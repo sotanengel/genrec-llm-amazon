@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
@@ -61,6 +61,18 @@ def compute_cache_key(config: CacheKeyConfig) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+CacheScope = Literal["eval", "train"]
+
+
+def _scope_suffix(scope: CacheScope) -> str:
+    """Filename suffix for train scope; eval keeps legacy paths for compatibility."""
+    return "" if scope == "eval" else ".train"
+
+
+class MemmapSizeMismatchError(ValueError):
+    """Raised when an on-disk memmap size does not match the requested row count."""
+
+
 class HiddenStateCache:
     """float16 memmap cache for hidden states with resumable row writes.
 
@@ -92,22 +104,58 @@ class HiddenStateCache:
     are merged if both happen to be present (e.g. a run upgraded mid-flight).
     """
 
-    def __init__(self, cache_dir: Path, key: str, n_samples: int, hidden_dim: int) -> None:
+    def __init__(
+        self,
+        cache_dir: Path,
+        key: str,
+        n_samples: int,
+        hidden_dim: int,
+        scope: CacheScope = "eval",
+    ) -> None:
         self.cache_dir = cache_dir
         self.key = key
         self.n_samples = n_samples
         self.hidden_dim = hidden_dim
+        self.scope = scope
+        suffix = _scope_suffix(scope)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.memmap_path = self.cache_dir / f"{key}.f16.memmap"
-        self.index_path = self.cache_dir / f"{key}.index.parquet"
-        self.meta_path = self.cache_dir / f"{key}.meta.json"
+        self.memmap_path = self.cache_dir / f"{key}{suffix}.f16.memmap"
+        self.index_path = self.cache_dir / f"{key}{suffix}.index.parquet"
+        self.meta_path = self.cache_dir / f"{key}{suffix}.meta.json"
         # New append-only progress log (D1). One JSON array of row indices
         # per line, appended (never rewritten) by write_rows.
-        self.progress_path = self.cache_dir / f"{key}.progress.jsonl"
+        self.progress_path = self.cache_dir / f"{key}{suffix}.progress.jsonl"
         # Old whole-file progress format, kept only for backward-compatible
         # reads on resume (D1).
-        self._legacy_progress_path = self.cache_dir / f"{key}.progress.json"
+        self._legacy_progress_path = self.cache_dir / f"{key}{suffix}.progress.json"
         self._memmap: np.memmap | None = None
+
+    @staticmethod
+    def infer_n_samples(memmap_path: Path, hidden_dim: int) -> int:
+        """Derive row count from an on-disk float16 memmap file."""
+        if not memmap_path.exists():
+            raise FileNotFoundError(f"Cache memmap not found: {memmap_path}")
+        nbytes = memmap_path.stat().st_size
+        row_bytes = hidden_dim * 2
+        if nbytes % row_bytes != 0:
+            raise ValueError(
+                f"Memmap size {nbytes} is not a multiple of hidden_dim*2 ({row_bytes})"
+            )
+        return nbytes // row_bytes
+
+    @classmethod
+    def open_existing(
+        cls,
+        cache_dir: Path,
+        key: str,
+        hidden_dim: int,
+        scope: CacheScope = "eval",
+    ) -> HiddenStateCache:
+        """Open a finalized cache, inferring ``n_samples`` from the memmap file."""
+        suffix = _scope_suffix(scope)
+        memmap_path = cache_dir / f"{key}{suffix}.f16.memmap"
+        n_samples = cls.infer_n_samples(memmap_path, hidden_dim)
+        return cls(cache_dir, key, n_samples, hidden_dim, scope=scope)
 
     @property
     def expected_bytes(self) -> int:
@@ -150,6 +198,16 @@ class HiddenStateCache:
 
     def _open_memmap(self) -> np.memmap:
         if self._memmap is None:
+            if self.memmap_path.exists():
+                on_disk_rows = self.infer_n_samples(self.memmap_path, self.hidden_dim)
+                if on_disk_rows != self.n_samples:
+                    raise MemmapSizeMismatchError(
+                        f"Memmap row count mismatch for {self.memmap_path}: "
+                        f"file has {on_disk_rows} rows but caller requested "
+                        f"n_samples={self.n_samples}. Refusing to resize or "
+                        "re-encode silently — use the correct scope/sample parquet "
+                        "or a separate train memmap."
+                    )
             self._memmap = np.memmap(
                 self.memmap_path,
                 dtype=np.float16,

@@ -5,9 +5,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
-from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
+from genrec_lite.encode.cache import (
+    CacheKeyConfig,
+    HiddenStateCache,
+    MemmapSizeMismatchError,
+    compute_cache_key,
+)
 from genrec_lite.encode.prefill import ENCODER_VERSION
 
 
@@ -214,3 +220,49 @@ def test_legacy_and_new_progress_formats_are_merged(tmp_path: Path) -> None:
     # finalize() should clean up both progress files.
     assert not legacy_path.exists()
     assert not cache.progress_path.exists()
+
+
+def test_cache_scope_eval_uses_legacy_paths(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "abc", n_samples=1, hidden_dim=2, scope="eval")
+    assert cache.memmap_path.name == "abc.f16.memmap"
+    assert cache.index_path.name == "abc.index.parquet"
+
+
+def test_cache_scope_train_uses_suffix_paths(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "abc", n_samples=1, hidden_dim=2, scope="train")
+    assert cache.memmap_path.name == "abc.train.f16.memmap"
+    assert cache.index_path.name == "abc.train.index.parquet"
+
+
+def test_cache_load_infers_n_samples_from_file_size(tmp_path: Path) -> None:
+    n_samples, hidden_dim = 4, 3
+    cache = HiddenStateCache(
+        tmp_path, "k", n_samples=n_samples, hidden_dim=hidden_dim, scope="eval"
+    )
+    hidden = torch.arange(n_samples * hidden_dim, dtype=torch.float32).reshape(
+        n_samples, hidden_dim
+    )
+    cache.save(list(range(n_samples)), hidden)
+
+    opened = HiddenStateCache.open_existing(tmp_path, "k", hidden_dim, scope="eval")
+    assert opened.n_samples == n_samples
+    assert torch.equal(opened.load().to(torch.float32), hidden)
+
+
+def test_cache_rejects_size_mismatch_without_reencode(tmp_path: Path) -> None:
+    cache = HiddenStateCache(tmp_path, "k", n_samples=2, hidden_dim=2, scope="eval")
+    cache.save([1, 2], torch.tensor([[1.0, 2.0], [3.0, 4.0]]))
+
+    bad = HiddenStateCache(tmp_path, "k", n_samples=5, hidden_dim=2, scope="eval")
+    with pytest.raises(MemmapSizeMismatchError, match="row count mismatch"):
+        bad.write_rows([0], torch.tensor([[1.0, 2.0]]))
+
+
+def test_eval_and_train_memmaps_are_independent(tmp_path: Path) -> None:
+    eval_cache = HiddenStateCache(tmp_path, "k", n_samples=1, hidden_dim=2, scope="eval")
+    train_cache = HiddenStateCache(tmp_path, "k", n_samples=2, hidden_dim=2, scope="train")
+    eval_cache.save([10], torch.tensor([[1.0, 2.0]]))
+    train_cache.save([20, 21], torch.tensor([[3.0, 4.0], [5.0, 6.0]]))
+    assert eval_cache.memmap_path.exists()
+    assert train_cache.memmap_path.exists()
+    assert eval_cache.memmap_path != train_cache.memmap_path
