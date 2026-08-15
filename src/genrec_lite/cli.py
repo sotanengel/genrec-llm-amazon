@@ -26,10 +26,10 @@ from genrec_lite.config import (
     load_verbalizer_config,
 )
 from genrec_lite.data.loaders.amazon import prepare_amazon_dataset
-from genrec_lite.data.schema import read_parquet_bundle
+from genrec_lite.data.schema import read_parquet_bundle, read_train_samples
 from genrec_lite.data.stats import print_stats
 from genrec_lite.encode.batching import batch_indices_by_token_budget
-from genrec_lite.encode.cache import CacheKeyConfig, HiddenStateCache, compute_cache_key
+from genrec_lite.encode.cache import CacheKeyConfig, CacheScope, HiddenStateCache, compute_cache_key
 from genrec_lite.encode.prefill import ENCODER_VERSION, PrefillEncoder
 from genrec_lite.eval.runner import evaluate
 from genrec_lite.models.baselines import build_baseline
@@ -391,6 +391,11 @@ def encode_run(
     model: str = typer.Option("qwen3-1.7b-base", "--model", help="LLM config name"),
     verbalizer: str = typer.Option("v1_full", "--verbalizer", help="Verbalizer config name"),
     cache_dir: str = typer.Option("cache/hidden_states", "--cache-dir"),
+    scope: CacheScope = typer.Option(
+        "eval",
+        "--scope",
+        help="eval encodes samples.parquet (valid+test); train encodes train_samples.parquet",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Encode samples with frozen LLM prefill and cache hidden states."""
@@ -405,13 +410,17 @@ def encode_run(
         raise typer.Exit(code=1)
 
     interactions, items, users, samples = read_parquet_bundle(data_dir)
+    if scope == "train":
+        encode_samples = read_train_samples(data_dir)
+    else:
+        encode_samples = samples
     try:
         renderer, budget = _resolve_verbalizer_and_budget(verb_config, llm_config)
     except TokenizerResolutionError as exc:
         console.print(f"[red]Tokenizer resolution failed:[/red] {exc}")
         raise typer.Exit(code=1) from exc
-    texts = _render_texts(samples, items, users, interactions, renderer, budget)
-    sample_ids = [int(x) for x in samples["sample_id"].to_list()]
+    texts = _render_texts(encode_samples, items, users, interactions, renderer, budget)
+    sample_ids = [int(x) for x in encode_samples["sample_id"].to_list()]
 
     encoder = PrefillEncoder.from_config(llm_config)
     hidden_dim = int(encoder.encode_batch([texts[0]]).shape[1])
@@ -431,7 +440,7 @@ def encode_run(
             encoder_version=ENCODER_VERSION,
         )
     )
-    cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim)
+    cache = HiddenStateCache(root / cache_dir, cache_key, len(texts), hidden_dim, scope=scope)
     if cache.exists():
         console.print(f"[yellow]Cache hit:[/yellow] {cache.memmap_path}")
         raise typer.Exit(code=0)
