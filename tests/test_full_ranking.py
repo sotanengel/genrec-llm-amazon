@@ -74,3 +74,86 @@ def test_evaluator_rejects_sampled_ranking(mini_bundle: tuple) -> None:
             ks=(10,),
             slices=("all",),
         )
+
+
+def test_evaluator_scores_samples_in_bounded_batches(mini_bundle: tuple) -> None:
+    interactions, items, users, samples = mini_bundle
+    del users
+    eval_samples = samples.head(5)
+    observed_batch_sizes: list[int] = []
+
+    def score_fn(batch: pl.DataFrame) -> np.ndarray:
+        observed_batch_sizes.append(batch.height)
+        sample_ids = np.asarray(batch["sample_id"].to_list(), dtype=np.float64)
+        item_ids = np.arange(items.height, dtype=np.float64)
+        return sample_ids[:, None] * 0.01 + item_ids[None, :]
+
+    evaluate(
+        score_fn=score_fn,
+        samples=eval_samples,
+        items=items,
+        interactions=interactions,
+        ks=(2,),
+        slices=("all",),
+        eval_batch_size=2,
+    )
+
+    assert observed_batch_sizes == [2, 2, 1]
+
+
+def test_batched_evaluation_preserves_global_metrics(mini_bundle: tuple) -> None:
+    interactions, items, users, samples = mini_bundle
+    del users
+    eval_samples = samples.head(5)
+
+    def score_fn(batch: pl.DataFrame) -> np.ndarray:
+        sample_ids = np.asarray(batch["sample_id"].to_list(), dtype=np.float64)
+        item_ids = np.arange(items.height, dtype=np.float64)
+        return -np.abs(sample_ids[:, None] % items.height - item_ids[None, :])
+
+    unbatched = evaluate(
+        score_fn=score_fn,
+        samples=eval_samples,
+        items=items,
+        interactions=interactions,
+        ks=(1, 3),
+        slices=("all",),
+        eval_batch_size=eval_samples.height,
+    )
+    batched = evaluate(
+        score_fn=score_fn,
+        samples=eval_samples,
+        items=items,
+        interactions=interactions,
+        ks=(1, 3),
+        slices=("all",),
+        eval_batch_size=2,
+    )
+
+    pd_columns = [
+        "recall@1",
+        "ndcg@3",
+        "mrr@3",
+        "coverage@3",
+        "gini@3",
+        "avg_popularity@3",
+        "novelty@3",
+    ]
+    np.testing.assert_allclose(
+        batched[pd_columns].to_numpy(),
+        unbatched[pd_columns].to_numpy(),
+    )
+
+
+def test_evaluator_rejects_non_positive_batch_size(mini_bundle: tuple) -> None:
+    interactions, items, users, samples = mini_bundle
+    del users
+    with pytest.raises(ValueError, match="eval_batch_size"):
+        evaluate(
+            score_fn=lambda batch: np.zeros((batch.height, items.height)),
+            samples=samples.head(1),
+            items=items,
+            interactions=interactions,
+            slices=("all",),
+            eval_batch_size=0,
+        )

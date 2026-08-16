@@ -581,6 +581,7 @@ def train_head(
             device=device,
             log_q=log_q,
             ks=tuple(exp_config.ks),
+            eval_batch_size=exp_config.eval_batch_size,
             cold_threshold=exp_config.cold_threshold,
             method_name="genrec_lite",
         )
@@ -595,6 +596,7 @@ def train_head(
             ks=tuple(exp_config.ks),
             cold_threshold=exp_config.cold_threshold,
             method="genrec_lite",
+            eval_batch_size=exp_config.eval_batch_size,
         )
         result["seed"] = current_seed
         all_results.append(result)

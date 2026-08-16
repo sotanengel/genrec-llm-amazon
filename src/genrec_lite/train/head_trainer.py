@@ -62,6 +62,7 @@ class HeadTrainer:
     device: torch.device
     log_q: Tensor
     ks: tuple[int, ...] = (10, 20)
+    eval_batch_size: int = 32
     cold_threshold: int = 5
     method_name: str = "genrec_lite"
 
@@ -202,6 +203,7 @@ class HeadTrainer:
             slices=("all",),
             cold_threshold=self.cold_threshold,
             method=self.method_name,
+            eval_batch_size=self.eval_batch_size,
         )
         if result.empty or metric_name not in result.columns:
             return float("-inf")
