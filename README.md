@@ -97,6 +97,23 @@ wsl.exe -d Ubuntu-24.04 -u <あなたのLinuxユーザー名> -- bash -lc "/mnt/
 2. `scripts/wsl/fetch_models.sh` で `configs/model/llm/*.yaml` に定義されたモデル（`model_id` / `revision`）を `hf download`（`huggingface-cli download` は非推奨）でダウンロードする。ダウンロードは再開可能。`gated: true` のモデルでダウンロードが失敗した場合は、生の 401 トレースバックの代わりに該当モデルのライセンスページへのリンクを表示する。
 3. モデル取得後は `scripts/wsl/run.sh --offline ...` でオフライン実行し、ネットワークに依存しない再現可能な実行にする（`HF_HUB_OFFLINE=1`）。
 
+### 中断した M3 train-head の永続再開
+
+encode キャッシュ完成後に train-head または report が中断した場合は、WSL の systemd user service を使う。サービスは失敗時に 30 秒後に再起動し、出力は journald と `logs/resume_train_head_*.log` に残す。正常完了は `logs/state/m3_resume.complete` へ原子的に記録されるため、再起動後も判定できる。
+
+```bash
+# 初回インストール（~/.config/systemd/user に現在の clone の絶対パスを反映）
+# 必要なら sudo 認証を行い、logout 後も user service を維持する linger も有効化する
+bash scripts/wsl/manage_m3_resume_service.sh install
+
+# 開始、状態確認、ログ追跡
+bash scripts/wsl/manage_m3_resume_service.sh start
+bash scripts/wsl/manage_m3_resume_service.sh status
+bash scripts/wsl/manage_m3_resume_service.sh logs
+```
+
+完了済みマーカーがある状態で意図的に再実行する場合だけ、`GENREC_FORCE_RESUME=1` をサービスの環境へ設定する。systemd user manager が利用できない環境では `resume_m3_train_head.sh` を tmux 内で実行できるが、通常は systemd を優先する。監視の最新状態は `bash scripts/wsl/monitor_m3_latest.sh` で取得でき、再開サービスの active/failed と永続完了マーカーも反映される。
+
 ### WSL クラッシュ後に不可解なモデルロードエラーが出たら
 
 WSL VM がハードクラッシュした直後は `~/.cache/huggingface` の中身（`config.json` / `tokenizer.json` など）が書き込み途中で壊れていることがあり、`Unrecognized model` や `Couldn't instantiate the backend tokenizer` のような不可解なエラーになる。**該当モデルのキャッシュディレクトリを削除して `scripts/wsl/fetch_models.sh` で再取得する**のが対処法。

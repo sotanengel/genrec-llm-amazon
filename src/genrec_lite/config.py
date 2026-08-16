@@ -74,6 +74,7 @@ class M3ExpConfig(BaseModel):
     ks: list[int] = Field(default_factory=lambda: [10, 20])
     seeds: list[int] = Field(default_factory=lambda: [0])
     eval_split: int = Field(default=1, ge=0, le=2)
+    eval_batch_size: int = Field(default=32, ge=1)
     cold_threshold: int = Field(default=5, ge=1)
 
 

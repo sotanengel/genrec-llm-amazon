@@ -18,5 +18,6 @@ embed_model: sentence-transformers/all-MiniLM-L6-v2
 ks: [10, 20]
 seeds: [0]
 eval_split: 2
+eval_batch_size: 32
 cold_threshold: 5
 cache_dir: cache/hidden_states

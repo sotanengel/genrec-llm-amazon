@@ -16,6 +16,11 @@ LOG_DIR="${ROOT}/logs"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/run_m3_$(date +%Y%m%d_%H%M%S).log"
 
+# Start log monitor (1 min x10, then 30 min) unless already running.
+if [[ "${GENREC_SKIP_MONITOR:-}" != "1" ]]; then
+  nohup bash scripts/wsl/monitor_m3_production.sh >> "${LOG_DIR}/monitor_nohup.out" 2>&1 &
+fi
+
 echo "==> M3 production run" | tee -a "${LOG_FILE}"
 echo "    dataset=${GENREC_DATASET} model=${GENREC_MODEL} verbalizer=${GENREC_VERBALIZER} exp=${GENREC_EXP}" | tee -a "${LOG_FILE}"
 

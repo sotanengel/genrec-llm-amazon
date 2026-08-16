@@ -30,3 +30,15 @@ def test_load_m3_frozen_uses_qwen3_8b_nf4() -> None:
     assert exp.dataset == "amazon_video_games"
     assert exp.model == "qwen3-8b-base"
     assert exp.verbalizer == "v1_full"
+    assert exp.eval_batch_size == 32
+
+
+def test_m3_eval_batch_size_must_be_positive(tmp_path: Path) -> None:
+    root = Path(__file__).parent.parent
+    exp_path = root / "configs" / "exp" / "m3_frozen.yaml"
+    data = exp_path.read_text(encoding="utf-8").replace("eval_batch_size: 32", "eval_batch_size: 0")
+    tmp_config = tmp_path
+    (tmp_config / "exp").mkdir(parents=True, exist_ok=True)
+    (tmp_config / "exp" / "invalid.yaml").write_text(data, encoding="utf-8")
+    with pytest.raises(ValueError, match="eval_batch_size"):
+        load_m3_exp_config("invalid", config_dir=tmp_config)

@@ -88,3 +88,41 @@ def test_ps1_script_has_no_and_or_or_operators(script: Path) -> None:
     text = script.read_text(encoding="utf-8")
     assert "&&" not in text, f"{script} contains '&&', which is a parser error in PowerShell 5.1"
     assert "||" not in text, f"{script} contains '||', which is a parser error in PowerShell 5.1"
+
+
+def test_resume_systemd_service_is_restartable_and_logged() -> None:
+    template = WSL_DIR / "systemd" / "genrec-m3-resume.service.in"
+    assert template.exists()
+    text = template.read_text(encoding="utf-8")
+    assert "Restart=on-failure" in text
+    assert "RestartSec=" in text
+    assert "resume_m3_train_head.sh" in text
+    assert "StandardOutput=journal" in text
+    assert "StandardError=journal" in text
+
+
+def test_service_manager_supports_lifecycle_and_logs() -> None:
+    manager = WSL_DIR / "manage_m3_resume_service.sh"
+    assert manager.exists()
+    text = manager.read_text(encoding="utf-8")
+    for command in ("install", "start", "status", "logs"):
+        assert command in text
+    assert "systemctl --user daemon-reload" in text
+    assert "systemctl --user enable" in text
+    assert "loginctl enable-linger" in text
+    assert "journalctl --user-unit" in text
+    assert "wsl --shutdown" not in text.lower()
+
+
+def test_resume_pipeline_records_durable_completion_marker() -> None:
+    resume = (WSL_DIR / "resume_m3_train_head.sh").read_text(encoding="utf-8")
+    assert "m3_resume.complete" in resume
+    assert "mv " in resume
+
+
+def test_monitor_handles_systemd_resume_and_completion() -> None:
+    monitor = (WSL_DIR / "monitor_m3_production.sh").read_text(encoding="utf-8")
+    assert "systemctl --user is-active" in monitor
+    assert "systemctl --user is-failed" in monitor
+    assert "m3_resume.complete" in monitor
+    assert "phase=failed" in monitor

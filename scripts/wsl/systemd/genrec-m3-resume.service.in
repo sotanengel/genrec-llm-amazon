@@ -1,0 +1,17 @@
+[Unit]
+Description=GenRec M3 train-head and report resume
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+ExecStart=/usr/bin/bash @PROJECT_ROOT@/scripts/wsl/resume_m3_train_head.sh
+Restart=on-failure
+RestartSec=30s
+TimeoutStartSec=infinity
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=genrec-m3-resume
+
+[Install]
+WantedBy=default.target
