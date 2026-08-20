@@ -55,7 +55,7 @@ genrec-lite = "genrec_lite.cli:app"
 # tests/test_toolchain_consistency.py enforces this at test time.
 lint = [
     "ruff==0.16.2",
-    "mypy==1.18.*",
+    "mypy>=1.18,<2.4",
     "types-PyYAML>=6.0",
 ]
 test = [
